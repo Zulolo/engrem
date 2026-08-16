@@ -200,6 +200,7 @@
   <div class="spacer"></div>
   <button class="btn" id="autoSpeakBtn" title="Auto-pronounce: speaks each word when you switch to it (EN→ZH) or when you reveal the answer (ZH→EN). Shortcut: A">🔈 Auto</button>
   <button class="btn" id="cacheAllBtn" title="Download examples and pronunciation for every word into the local cache (click again to pause)">⬇ Cache</button>
+  <button class="btn" id="clearCacheBtn" title="Delete all cached examples and pronunciation audio (words and study progress are kept)">🧹 Clear cache</button>
   <button class="btn" id="listBtn" title="Shortcut: L">📋 List</button>
   <button class="btn" id="importBtn" title="Import a wordbook">📂 Import</button>
   <input type="file" id="fileInput" accept=".xml,text/xml" class="hidden">
@@ -549,6 +550,14 @@ const idb = {
     const db = await idb._open();
     return new Promise((res, rej) => {
       const t = db.transaction("audio", "readwrite").objectStore("audio").put(rec);
+      t.onsuccess = () => res();
+      t.onerror = () => rej(t.error);
+    });
+  },
+  clearStore: async (store) => {
+    const db = await idb._open();
+    return new Promise((res, rej) => {
+      const t = db.transaction(store, "readwrite").objectStore(store).clear();
       t.onsuccess = () => res();
       t.onerror = () => rej(t.error);
     });
@@ -1254,6 +1263,19 @@ $("cacheAllBtn").addEventListener("click", async () => {
   toast(stopped
     ? "Caching paused at " + done + "/" + total
     : "Example cache complete" + (failed ? " (" + failed + " words failed — likely network)" : ""));
+});
+
+$("clearCacheBtn").addEventListener("click", async () => {
+  if (bulkRunning) { toast("Pause the bulk download first"); return; }
+  if (!confirm("Clear all cached examples and pronunciation audio?\nWords, study position and known-marks are kept.")) return;
+  exMem.clear(); exInflight.clear(); audioMem.clear(); audioInflight.clear();
+  try { await idb.clearStore("ex"); } catch {}
+  try { await idb.clearStore("audio"); } catch {}
+  if (servedMode) {
+    try { await fetch("api/clear-cache", { method: "POST" }); } catch {}
+  }
+  toast("Caches cleared — examples and audio will re-download as you study");
+  if (!$("studyWrap").classList.contains("hidden")) renderExamples();
 });
 
 $("listBtn").addEventListener("click", () => {

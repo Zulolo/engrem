@@ -53,9 +53,14 @@ also triggers the check.)
   - In `EngRem.bat` mode the server keeps its own disk cache
     (`examples-cache.json`), shared by all browsers; each word hits the public
     APIs at most once, ever.
-  - The **⬇ Examples** button in the header downloads examples for the entire
-    wordbook into the cache (click again to pause). After one full run the app
-    needs no network at all for studying.
+  - The **⬇ Cache** button in the header downloads examples and pronunciation
+    for the entire wordbook into the cache (click again to pause). After one
+    full run the app needs no network at all for studying.
+  - The **🧹 Clear cache** button deletes all cached examples and audio — both
+    the browser's IndexedDB stores and, in server mode, the disk caches
+    (`examples-cache.json`, `audio-cache/`). Words, study position, and
+    known-marks are untouched. Use it to force a re-fetch, e.g. after the
+    example/pronunciation sources change.
 - **Real pronunciation with caching**: audio comes from Wikimedia Commons and
   the Free Dictionary API where available (real human recordings), with Youdao's
   voice service filling coverage gaps (see Credits). It is cached in the

@@ -228,6 +228,18 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/api/clear-cache") {
+    if (req.method !== "POST") { res.writeHead(405).end(); return; }
+    exCache = {}; cacheDirty = false;
+    audioIndex = {}; audioDirty = false;
+    try { fs.rmSync(CACHE_FILE, { force: true }); } catch {}
+    try { fs.rmSync(AUDIO_DIR, { recursive: true, force: true }); } catch {}
+    console.log("Caches cleared by client request");
+    res.writeHead(200, { "Content-Type": MIME[".json"] });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   if (pathname === "/api/audio") {
     const word = (url.searchParams.get("word") || "").trim();
     if (!word || word.length > 100) { res.writeHead(400).end(); return; }
