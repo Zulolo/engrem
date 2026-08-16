@@ -42,9 +42,16 @@ also triggers the check.)
 - **ZH → EN mode**: shows the Chinese translation with the English word hidden; in
   example sentences the target word (including inflections such as *thawed*,
   *thawing*) is replaced with `______` blanks until revealed, then highlighted.
-- **Example sentences**: fetched automatically from the Free Dictionary API and
-  Tatoeba, cached locally. When nothing is found you get one-click search links
-  to Youdao / Cambridge / Google.
+- **Example sentences**: fetched automatically from the Free Dictionary API,
+  Wiktionary, and Tatoeba, cached locally. Searches treat inflections as
+  exchangeable — a word saved as *thawed* also searches and matches *thaw /
+  thaws / thawing*, and vice versa. Only sentences that genuinely contain the
+  word (or an inflection of it) are shown. For words too rare for any corpus
+  (e.g. *advertent*), the search falls back to close relatives (*inadvertent*,
+  *advertently*) and labels those sentences "≈ inadvertent" — in ZH→EN mode the
+  related word is blanked too and the label stays generic until you reveal, so
+  the answer never leaks. When nothing qualifies at all you get one-click
+  search links to Youdao / Cambridge / Google.
 - **Fast, mostly-offline caching**:
   - Examples are stored in the browser's IndexedDB, so every word you have seen
     loads instantly and works offline.
@@ -107,9 +114,10 @@ Content shown at runtime comes from external services, each fetched live and
 cached locally on your machine:
 
 - **Example sentences**: [Tatoeba](https://tatoeba.org) (licensed
-  [CC BY 2.0 FR](https://creativecommons.org/licenses/by/2.0/fr/)) and the
-  [Free Dictionary API](https://dictionaryapi.dev), which serves
-  [Wiktionary](https://www.wiktionary.org) content (CC BY-SA).
+  [CC BY 2.0 FR](https://creativecommons.org/licenses/by/2.0/fr/)), the
+  [Free Dictionary API](https://dictionaryapi.dev), and the
+  [Wiktionary REST API](https://en.wiktionary.org/api/rest_v1/) — the latter
+  two serve [Wiktionary](https://www.wiktionary.org) content (CC BY-SA).
 - **Pronunciation audio**, tried in this order:
   1. [Wikimedia Commons](https://commons.wikimedia.org) — the CC-licensed human
      recordings behind Wiktionary, via the official API (partial coverage);

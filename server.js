@@ -29,6 +29,9 @@ const MIME = {
 };
 
 /* ---------- example cache (disk-backed) ---------- */
+/* EX_SCHEMA versions the fetch logic: bump it when search/filter quality
+   improves and every stale entry (including cached empties) refetches. */
+const EX_SCHEMA = 4;
 let exCache = {};
 try { exCache = JSON.parse(fs.readFileSync(CACHE_FILE, "utf-8")); } catch {}
 let cacheDirty = false;
@@ -110,57 +113,157 @@ process.on("SIGTERM", () => { flushCache(); process.exit(0); });
 process.on("exit", flushCache);
 
 /* ---------- example fetching (mirrors the logic in index.html) ---------- */
-function wordVariantsRegex(word) {
-  const w = word.trim();
-  if (!w) return null;
-  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (/\s/.test(w)) return new RegExp("\\b" + escRe(w).replace(/\s+/g, "\\s+") + "\\b", "gi");
-  const v = new Set([w, w + "s", w + "es", w + "ed", w + "d", w + "ing"]);
+/* Inflections are treated as exchangeable: a vocabulary word saved as "thawed"
+   should match (and search with) thaw/thaws/thawing, and vice versa. */
+function lemmaCandidates(word) {
+  const w = word.toLowerCase().trim();
+  const out = new Set([w]);
+  const add = (x) => { if (x && x.length > 2) out.add(x); };
+  if (w.endsWith("ies")) add(w.slice(0, -3) + "y");
+  if (w.endsWith("es")) { add(w.slice(0, -2)); add(w.slice(0, -1)); }
+  else if (w.endsWith("s") && !w.endsWith("ss")) add(w.slice(0, -1));
+  if (w.endsWith("ied")) add(w.slice(0, -3) + "y");
+  else if (w.endsWith("ed")) {
+    add(w.slice(0, -2)); add(w.slice(0, -1)); // wanted -> want, loved -> love
+    const st = w.slice(0, -2);
+    if (/(.)\1$/.test(st)) add(st.slice(0, -1)); // stopped -> stop
+  }
+  if (w.endsWith("ing")) {
+    const st = w.slice(0, -3);
+    add(st); add(st + "e"); // thawing -> thaw, hoping -> hope
+    if (/(.)\1$/.test(st)) add(st.slice(0, -1)); // running -> run
+  }
+  return [...out];
+}
+
+function expandForms(w) {
+  const v = new Set([w, w + "s", w + "es", w + "ed", w + "d", w + "ing", w + "ly"]);
   if (w.length > 2) {
     if (w.endsWith("e")) { const st = w.slice(0, -1); v.add(st + "ing"); v.add(st + "ed"); }
-    if (w.endsWith("y")) { const st = w.slice(0, -1); v.add(st + "ies"); v.add(st + "ied"); v.add(st + "ier"); v.add(st + "iest"); }
+    if (w.endsWith("y")) { const st = w.slice(0, -1); v.add(st + "ies"); v.add(st + "ied"); v.add(st + "ier"); v.add(st + "iest"); v.add(st + "ily"); }
     const last = w[w.length - 1];
     if (/[bdgklmnprtv]/.test(last) && /[aeiou]/.test(w[w.length - 2]) && !/[aeiou]/.test(w[w.length - 3] || "x")) {
       v.add(w + last + "ing"); v.add(w + last + "ed");
     }
   }
-  const parts = [...v].sort((a, b) => b.length - a.length).map(escRe);
+  return v;
+}
+
+/* Close morphological relatives, tried only when the word itself has no
+   examples anywhere (e.g. "advertent" -> "inadvertent"). Bogus candidates are
+   harmless: their searches return nothing and the loop moves on. */
+function relatedForms(word) {
+  const w = word.toLowerCase().trim();
+  if (/\s/.test(w) || w.length < 4) return [];
+  const out = [];
+  const add = (x) => { if (x && x !== w && out.length < 4 && !out.includes(x)) out.push(x); };
+  for (const p of ["in", "un", "im", "dis", "non", "ir", "il"]) {
+    if (w.startsWith(p) && w.length - p.length >= 4) add(w.slice(p.length)); // inadvertent -> advertent
+  }
+  add("in" + w); // advertent -> inadvertent
+  add("un" + w);
+  add(w.endsWith("y") ? w.slice(0, -1) + "ily" : w + "ly"); // -> advertently
+  return out;
+}
+
+function wordVariantsRegex(word) {
+  const w = word.trim();
+  if (!w) return null;
+  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (/\s/.test(w)) return new RegExp("\\b" + escRe(w).replace(/\s+/g, "\\s+") + "\\b", "gi");
+  const forms = new Set();
+  for (const lem of lemmaCandidates(w)) for (const f of expandForms(lem)) forms.add(f);
+  const parts = [...forms].sort((a, b) => b.length - a.length).map(escRe);
   return new RegExp("\\b(" + parts.join("|") + ")\\b", "gi");
 }
 
+/* Returns {ok, sentences}. ok=false means network failure — don't cache that. */
 async function fetchExamples(word) {
+  const primary = await searchSentences(word);
+  if (primary.ok && primary.sentences.length === 0) {
+    // nothing anywhere — try close relatives (advertent -> inadvertent)
+    for (const rel of relatedForms(word)) {
+      const r = await searchSentences(rel);
+      if (r.sentences.length) {
+        return { ok: true, sentences: r.sentences.slice(0, 3).map((s) => ({ ...s, rel })) };
+      }
+    }
+  }
+  return primary;
+}
+
+/* One sweep over the sources for a single term. */
+async function searchSentences(word) {
   let okAny = false;
   const sentences = [];
   const seen = new Set();
+  // near-duplicate key: contraction- and punctuation-insensitive
+  // ("What's your favourite advert?" == "What is your favourite advert?")
+  const exKey = (s) => s.toLowerCase().replace(/[’']/g, " ")
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t && !["is", "s", "are", "re", "am", "m", "not", "nt", "will", "ll", "have", "ve", "would", "d", "the", "a", "an"].includes(t))
+    .join(" ");
+  // filter AT COLLECTION time: a sentence must contain the word (or an
+  // inflection) to count toward the 5-sentence quota — otherwise wrong-word
+  // results from one source (e.g. dict's "wilt" -> "will" entry) fill the
+  // quota and block the sources that have the real sentences
+  const varRe = wordVariantsRegex(word);
   const push = (s, src) => {
     s = String(s).replace(/\s+/g, " ").trim();
     if (!s || s.length < 8 || s.length > 220) return;
-    const k = s.toLowerCase();
+    if (varRe) { varRe.lastIndex = 0; if (!varRe.test(s)) return; }
+    const k = exKey(s);
     if (seen.has(k)) return;
     seen.add(k);
     sentences.push({ text: s, src });
   };
-  // 1) Free Dictionary API
-  try {
-    const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(word),
-      { signal: AbortSignal.timeout(8000) });
-    if (r.ok || r.status === 404) okAny = true; // 404 = word simply not in that dictionary
-    if (r.ok) {
-      const data = await r.json();
-      for (const entry of Array.isArray(data) ? data : []) {
-        for (const m of entry.meanings || []) {
-          for (const d of m.definitions || []) {
-            if (d.example) push(d.example, "dict");
+  const stripHtml = (h) => String(h).replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+  // search with the word AND its base/inflected forms — a wordbook may store
+  // "thawed" while the good sentences use "thaw" or "thawing"
+  const searchTerms = /\s/.test(word) ? [word] : [...new Set([word.toLowerCase(), ...lemmaCandidates(word)])].slice(0, 3);
+  // 1) Free Dictionary API definition examples
+  for (const term of searchTerms) {
+    if (sentences.length >= 5) break;
+    try {
+      const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(term),
+        { signal: AbortSignal.timeout(8000) });
+      if (r.ok || r.status === 404) okAny = true; // 404 = term simply not in that dictionary
+      if (r.ok) {
+        const data = await r.json();
+        for (const entry of Array.isArray(data) ? data : []) {
+          for (const m of entry.meanings || []) {
+            for (const d of m.definitions || []) {
+              if (d.example) push(d.example, "dict");
+            }
           }
         }
       }
-    }
-  } catch {}
-  // 2) Tatoeba
-  if (sentences.length < 5) {
+    } catch {}
+  }
+  // 2) Wiktionary usage examples
+  for (const term of searchTerms) {
+    if (sentences.length >= 5) break;
+    try {
+      const r = await fetch("https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(term) + "?redirect=true",
+        { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) });
+      if (r.ok || r.status === 404) okAny = true;
+      if (r.ok) {
+        const data = await r.json();
+        for (const sec of data.en || []) {
+          for (const d of sec.definitions || []) {
+            for (const ex of d.parsedExamples || []) if (ex.example) push(stripHtml(ex.example), "wikt");
+            for (const ex of d.examples || []) push(stripHtml(ex), "wikt");
+          }
+        }
+      }
+    } catch {}
+  }
+  // 3) Tatoeba — unquoted, so its stemmed search covers inflections both ways
+  for (const term of searchTerms.slice(0, 2)) {
+    if (sentences.length >= 5) break;
     try {
       const u = "https://api.tatoeba.org/unstable/sentences?lang=eng&q=" +
-        encodeURIComponent('"' + word + '"') + "&sort=relevance&limit=8";
+        encodeURIComponent(term) + "&sort=relevance&limit=8";
       const r = await fetch(u, { signal: AbortSignal.timeout(8000) });
       if (r.ok) {
         okAny = true;
@@ -169,9 +272,8 @@ async function fetchExamples(word) {
       }
     } catch {}
   }
-  const re = wordVariantsRegex(word);
-  const hits = re ? sentences.filter((s) => { re.lastIndex = 0; return re.test(s.text); }) : sentences;
-  return { ok: okAny, sentences: (hits.length ? hits : sentences).slice(0, 5) };
+  // already filtered at collection time — wrong-word examples never enter
+  return { ok: okAny, sentences: sentences.slice(0, 5) };
 }
 
 /* ---------- http server ---------- */
@@ -213,14 +315,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     const key = word.toLowerCase();
-    if (exCache[key]) {
+    if (exCache[key] && exCache[key].v === EX_SCHEMA) {
       res.writeHead(200, { "Content-Type": MIME[".json"] });
       res.end(JSON.stringify({ ok: true, cached: true, sentences: exCache[key].sentences }));
       return;
     }
     const result = await fetchExamples(word);
     if (result.ok) {
-      exCache[key] = { sentences: result.sentences, ts: Date.now() };
+      exCache[key] = { sentences: result.sentences, ts: Date.now(), v: EX_SCHEMA };
       saveCacheSoon();
     }
     res.writeHead(200, { "Content-Type": MIME[".json"] });
