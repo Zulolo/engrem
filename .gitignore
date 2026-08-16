@@ -1,0 +1,8 @@
+# Personal wordbook exports contain Youdao's copyrighted dictionary definitions —
+# never commit them. Only the hand-written sample_wordbook.xml is tracked.
+*.xml
+!sample_wordbook.xml
+
+# Local caches of third-party content (Tatoeba / Wiktionary sentences, audio)
+examples-cache.json
+audio-cache/

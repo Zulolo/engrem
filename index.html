@@ -1,0 +1,1344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EngRem — Vocabulary Recall</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --text: #1c2330;
+    --muted: #6b7484;
+    --accent: #2563eb;
+    --accent-soft: #dbeafe;
+    --border: #e2e6ec;
+    --good: #16a34a;
+    --blank: #b45309;
+    --shadow: 0 1px 3px rgba(16,24,40,.08), 0 4px 16px rgba(16,24,40,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c;
+      --panel: #1b202b;
+      --text: #e6e9ef;
+      --muted: #8b93a5;
+      --accent: #60a5fa;
+      --accent-soft: #1e3a5f;
+      --border: #2a3140;
+      --good: #4ade80;
+      --blank: #fbbf24;
+      --shadow: 0 1px 3px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+    padding: .6rem 1rem;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 1.05rem; margin: 0 .4rem 0 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  .seg {
+    display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  }
+  .seg button {
+    border: none; background: transparent; color: var(--muted);
+    padding: .35rem .7rem; cursor: pointer; font-size: .85rem;
+  }
+  .seg button.active { background: var(--accent); color: #fff; }
+  button.btn, label.btn {
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    padding: .35rem .7rem; border-radius: 8px; cursor: pointer; font-size: .85rem;
+    display: inline-flex; align-items: center; gap: .3rem;
+  }
+  button.btn:hover, label.btn:hover { border-color: var(--accent); }
+  button.btn.toggled { background: var(--accent-soft); border-color: var(--accent); }
+  select {
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    padding: .32rem .5rem; border-radius: 8px; font-size: .85rem;
+  }
+  main {
+    flex: 1; display: flex; justify-content: center; align-items: stretch;
+    padding: 1rem; gap: 1rem; min-height: 0;
+  }
+  #studyWrap {
+    flex: 1; max-width: 780px; display: flex; flex-direction: column; gap: 1rem; min-width: 0;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: var(--shadow); padding: 1.6rem 1.8rem;
+  }
+  #promptCard { text-align: center; }
+  #counter { color: var(--muted); font-size: .8rem; margin-bottom: .6rem; }
+  #wordLine { font-size: 2.2rem; font-weight: 650; line-height: 1.25; word-break: break-word; }
+  #wordLine.zh { font-size: 1.35rem; font-weight: 500; text-align: left; white-space: pre-wrap; }
+  #phonetic { color: var(--muted); margin-top: .35rem; font-size: 1rem; }
+  #answerZone { margin-top: 1.1rem; }
+  #answer {
+    text-align: left; white-space: pre-wrap; font-size: 1.15rem; line-height: 1.55;
+    border-top: 1px dashed var(--border); padding-top: 1rem;
+  }
+  #answer .en-answer { font-size: 1.9rem; font-weight: 650; text-align: center; display: block; }
+  #revealBtn {
+    background: var(--accent); color: #fff; border: none; border-radius: 10px;
+    padding: .65rem 2.2rem; font-size: 1rem; cursor: pointer;
+  }
+  #revealBtn:hover { filter: brightness(1.08); }
+  .hint { color: var(--muted); font-size: .75rem; margin-top: .5rem; }
+  kbd {
+    background: var(--bg); border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 4px; padding: 0 .35em; font-size: .85em; font-family: inherit;
+  }
+  #examplesCard h3 {
+    margin: 0 0 .6rem; font-size: .85rem; color: var(--muted); font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em;
+    display: flex; align-items: center; gap: .5rem;
+  }
+  #exList { margin: 0; padding-left: 1.2rem; }
+  #exList li { margin: .45rem 0; line-height: 1.55; font-size: 1rem; }
+  #exList .src { color: var(--muted); font-size: .75rem; margin-left: .4rem; }
+  .w-blank { color: var(--blank); font-weight: 600; letter-spacing: .05em; }
+  .w-hit { color: var(--accent); font-weight: 650; }
+  #exStatus { color: var(--muted); font-size: .9rem; }
+  #exLinks { margin-top: .7rem; font-size: .8rem; color: var(--muted); }
+  #exLinks a { color: var(--accent); text-decoration: none; margin-right: .8rem; }
+  nav#navBar {
+    display: flex; justify-content: center; align-items: center; gap: 1rem; padding-bottom: .4rem;
+  }
+  nav#navBar button {
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    border-radius: 10px; padding: .55rem 1.4rem; font-size: .95rem; cursor: pointer;
+  }
+  nav#navBar button:hover { border-color: var(--accent); }
+  #famBtn.familiar { color: var(--good); border-color: var(--good); }
+  /* word list drawer */
+  #listPanel {
+    width: 270px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: var(--shadow); display: none; flex-direction: column; overflow: hidden;
+  }
+  #listPanel.open { display: flex; }
+  #listPanel input {
+    margin: .6rem; padding: .4rem .6rem; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg); color: var(--text); font-size: .85rem;
+  }
+  #listItems { flex: 1; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+  #listItems li {
+    padding: .35rem .8rem; cursor: pointer; font-size: .85rem; display: flex; justify-content: space-between; gap: .5rem;
+  }
+  #listItems li:hover { background: var(--accent-soft); }
+  #listItems li.current { background: var(--accent); color: #fff; }
+  #listItems li .fam { color: var(--good); }
+  /* import screen */
+  #importScreen {
+    flex: 1; max-width: 640px; display: flex; flex-direction: column; align-items: stretch;
+    justify-content: center; gap: 1rem; padding: 1rem;
+  }
+  #importScreen h2 { text-align: center; font-size: 1.25rem; margin: 0; font-weight: 600; }
+  #folderCard { padding: 1rem 1.2rem; }
+  #folderHead {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  }
+  #folderHead .title { font-weight: 600; font-size: .95rem; }
+  #folderHead .spacer { flex: 1; }
+  #folderNote { color: var(--muted); font-size: .8rem; margin-top: .5rem; line-height: 1.5; }
+  #xmlList { list-style: none; margin: .7rem 0 0; padding: 0; }
+  #xmlList li {
+    display: flex; align-items: center; gap: .7rem;
+    padding: .55rem .7rem; border: 1px solid var(--border); border-radius: 10px;
+    margin-top: .45rem; cursor: pointer; transition: border-color .12s, background .12s;
+  }
+  #xmlList li:hover { border-color: var(--accent); background: var(--accent-soft); }
+  #xmlList .fname { font-weight: 600; word-break: break-all; }
+  #xmlList .fmeta { color: var(--muted); font-size: .78rem; margin-left: auto; white-space: nowrap; }
+  #dropZone {
+    border: 2px dashed var(--border); border-radius: 16px; padding: 2rem; text-align: center;
+    color: var(--muted); cursor: pointer; transition: border-color .15s, background .15s;
+    background: var(--panel);
+  }
+  #dropZone.drag { border-color: var(--accent); background: var(--accent-soft); }
+  #dropZone strong { color: var(--text); font-size: 1rem; display: block; margin-bottom: .4rem; }
+  #importStatus { color: var(--muted); font-size: .9rem; text-align: center; min-height: 1.2em; }
+  #backRow { text-align: center; }
+  footer {
+    text-align: center; color: var(--muted); font-size: .72rem; padding: .45rem; border-top: 1px solid var(--border);
+  }
+  .hidden { display: none !important; }
+  #toast {
+    position: fixed; bottom: 4rem; left: 50%; transform: translateX(-50%);
+    background: var(--text); color: var(--bg); padding: .5rem 1rem; border-radius: 8px;
+    font-size: .85rem; opacity: 0; pointer-events: none; transition: opacity .25s;
+  }
+  #toast.show { opacity: .92; }
+  @media (max-width: 720px) {
+    #listPanel { position: fixed; right: .5rem; top: 3.5rem; bottom: 3rem; z-index: 10; }
+    #wordLine { font-size: 1.7rem; }
+    .card { padding: 1.1rem 1.2rem; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>EngRem</h1>
+  <div class="seg" id="modeSeg">
+    <button id="modeEn" title="Shortcut: M">EN → ZH</button>
+    <button id="modeZh" title="Shortcut: M">ZH → EN</button>
+  </div>
+  <button class="btn" id="shuffleBtn" title="Shortcut: S">🔀 Shuffle</button>
+  <button class="btn" id="hideFamBtn" title="Skip words marked as known">🙈 Skip known</button>
+  <div class="spacer"></div>
+  <button class="btn" id="autoSpeakBtn" title="Auto-pronounce: speaks each word when you switch to it (EN→ZH) or when you reveal the answer (ZH→EN). Shortcut: A">🔈 Auto</button>
+  <button class="btn" id="cacheAllBtn" title="Download examples and pronunciation for every word into the local cache (click again to pause)">⬇ Cache</button>
+  <button class="btn" id="listBtn" title="Shortcut: L">📋 List</button>
+  <button class="btn" id="importBtn" title="Import a wordbook">📂 Import</button>
+  <input type="file" id="fileInput" accept=".xml,text/xml" class="hidden">
+  <input type="file" id="dirInput" webkitdirectory class="hidden">
+</header>
+
+<main>
+  <!-- import screen -->
+  <div id="importScreen">
+    <h2>Import a Youdao wordbook</h2>
+
+    <div class="card" id="folderCard">
+      <div id="folderHead">
+        <span class="title">Wordbook files <span id="folderName" style="color:var(--muted);font-weight:400"></span></span>
+        <span class="spacer"></span>
+        <button class="btn" id="scanBtn">📁 Scan folder…</button>
+      </div>
+      <ul id="xmlList"></ul>
+      <div id="folderNote"></div>
+    </div>
+
+    <div id="dropZone" tabindex="0">
+      <strong>…or drop a file here</strong>
+      Drag an exported <code>.xml</code> wordbook onto this page, or click to browse for a single file
+    </div>
+
+    <div id="importStatus"></div>
+    <div id="backRow" class="hidden"><button class="btn" id="backBtn">← Back to study</button></div>
+  </div>
+
+  <!-- study screen -->
+  <div id="studyWrap" class="hidden">
+    <div class="card" id="promptCard">
+      <div id="counter"></div>
+      <div id="wordLine"></div>
+      <div id="phonetic"></div>
+      <div id="answerZone">
+        <button id="revealBtn">Show Answer</button>
+        <div id="answer" class="hidden"></div>
+        <div class="hint">
+          <kbd>Space</kbd> show/hide &nbsp; <kbd>←</kbd><kbd>→</kbd> prev/next &nbsp;
+          <kbd>M</kbd> switch mode &nbsp; <kbd>F</kbd> mark known &nbsp; <kbd>P</kbd> pronounce &nbsp; <kbd>A</kbd> auto-pronounce
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="examplesCard">
+      <h3>Examples <span id="exStatus"></span></h3>
+      <ul id="exList"></ul>
+      <div id="exLinks"></div>
+    </div>
+
+    <nav id="navBar">
+      <button id="prevBtn" title="←">← Prev</button>
+      <button id="famBtn" title="F">✓ Known</button>
+      <button id="speakBtn" title="P">🔊 Speak</button>
+      <button id="nextBtn" title="→">Next →</button>
+    </nav>
+  </div>
+
+  <!-- word list drawer -->
+  <aside id="listPanel">
+    <input id="listSearch" type="search" placeholder="Search words…">
+    <ul id="listItems"></ul>
+  </aside>
+</main>
+
+<footer>Data stays in your browser (localStorage). Examples: Free Dictionary API / Tatoeba.</footer>
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+/* ---------------- state ---------------- */
+const LS = {
+  words: "engrem.words",
+  state: "engrem.state",
+  familiar: "engrem.familiar",
+  exCache: "engrem.examples",
+  lastImport: "engrem.lastImport",
+};
+
+let words = [];           // [{word, trans, phonetic, tags, progress}]
+let order = [];           // indices into words, after filter/shuffle
+let pos = 0;              // position in order
+let mode = "en2zh";       // or "zh2en"
+let shuffled = false;
+let hideFamiliar = false;
+let revealed = false;
+let autoSpeak = false;
+let familiar = new Set();
+
+function loadJSON(key, fallback) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+  catch { return fallback; }
+}
+function saveJSON(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); }
+  catch (e) { /* quota — drop example cache and retry once */
+    if (key !== LS.exCache) { try { localStorage.removeItem(LS.exCache); localStorage.setItem(key, JSON.stringify(val)); } catch {} }
+  }
+}
+
+/* ---------------- XML import ---------------- */
+function looksLikeYoudao(text) {
+  return text.includes("<wordbook>") && text.includes("<item>") && text.includes("<word>");
+}
+
+function countUniqueWords(text) {
+  const s = new Set();
+  for (const m of text.matchAll(/<word>([\s\S]*?)<\/word>/g)) s.add(m[1].trim());
+  return s.size;
+}
+
+/* This is an English-recall app: entries saved from other languages (e.g. a
+   Chinese word looked up for its English translation, lanfrom=zh-CHS) are
+   skipped at import to keep things simple. */
+function isEnglishEntry(word, lanfrom) {
+  if (lanfrom && lanfrom.toLowerCase() !== "en") return false;
+  return !/[一-鿿぀-ヿ가-힯]/.test(word); // CJK backup check
+}
+
+let lastParseSkipped = 0; // non-English entries dropped by the last parse
+
+function parseYoudaoXML(text) {
+  const out = [];
+  let skipped = 0;
+  const doc = new DOMParser().parseFromString(text, "text/xml");
+  if (!doc.querySelector("parsererror")) {
+    for (const item of doc.querySelectorAll("item")) {
+      const g = (tag) => { const el = item.querySelector(tag); return el ? el.textContent.trim() : ""; };
+      const w = g("word");
+      if (!w) continue;
+      if (!isEnglishEntry(w, g("lanfrom"))) { skipped++; continue; }
+      out.push({ word: w, trans: g("trans"), phonetic: g("phonetic"), tags: g("tags"), progress: g("progress") });
+    }
+  }
+  if (out.length === 0) {
+    // fallback: tolerant regex parse
+    skipped = 0;
+    const items = text.split(/<item>/).slice(1);
+    for (const it of items) {
+      const grab = (tag) => {
+        const m = it.match(new RegExp("<" + tag + ">([\\s\\S]*?)</" + tag + ">"));
+        if (!m) return "";
+        return m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").trim();
+      };
+      const w = grab("word");
+      if (!w) continue;
+      if (!isEnglishEntry(w, grab("lanfrom"))) { skipped++; continue; }
+      out.push({ word: w, trans: grab("trans"), phonetic: grab("phonetic"), tags: grab("tags"), progress: grab("progress") });
+    }
+  }
+  lastParseSkipped = skipped;
+  // Youdao exports can repeat a word (once per group membership plus ungrouped
+  // copies) — keep one entry per word, merging in any missing fields
+  const byWord = new Map();
+  for (const e of out) {
+    const prev = byWord.get(e.word);
+    if (!prev) byWord.set(e.word, e);
+    else {
+      if (!prev.trans && e.trans) prev.trans = e.trans;
+      if (!prev.phonetic && e.phonetic) prev.phonetic = e.phonetic;
+    }
+  }
+  return [...byWord.values()];
+}
+
+function importText(text, name, meta, keepWord) {
+  const status = document.getElementById("importStatus");
+  try {
+    const parsed = parseYoudaoXML(text);
+    if (parsed.length === 0) {
+      status.textContent = "No words found in " + name + " — is it a Youdao wordbook export?";
+      return false;
+    }
+    words = parsed;
+    saveJSON(LS.words, words);
+    // remember the source file so a changed re-export is picked up automatically
+    saveJSON(LS.lastImport, { name, size: meta ? meta.size : undefined, mtime: meta ? meta.mtime : undefined });
+    status.textContent = "";
+    const rawCount = (text.match(/<word>/g) || []).length;
+    const skippedNote = lastParseSkipped > 0 ? ", " + lastParseSkipped + " non-English skipped" : "";
+    toast(rawCount > parsed.length
+      ? "Imported " + parsed.length + " unique words (" + rawCount + " entries in export" + skippedNote + ", duplicates merged)"
+      : "Imported " + parsed.length + " words from " + name + skippedNote);
+    rebuildOrder(true);
+    if (keepWord) {
+      const i = order.findIndex((oi) => words[oi].word === keepWord);
+      if (i >= 0) pos = i;
+      saveState();
+    }
+    revealed = false;
+    showStudy();
+    return true;
+  } catch (e) {
+    status.textContent = "Failed to parse " + name + ": " + e.message;
+    return false;
+  }
+}
+
+function importFile(file) {
+  const status = document.getElementById("importStatus");
+  status.textContent = "Reading " + file.name + " …";
+  const reader = new FileReader();
+  reader.onload = () => importText(reader.result, file.name, { size: file.size, mtime: file.lastModified });
+  reader.onerror = () => { status.textContent = "Could not read " + file.name; };
+  reader.readAsText(file, "utf-8");
+}
+
+/* On startup, re-import the remembered source file if it changed on disk
+   (e.g. the user re-exported the wordbook under the same name). */
+async function checkForUpdatedWordbook() {
+  let last = loadJSON(LS.lastImport, null);
+  // wordbook imported before this feature existed: adopt the folder's file once
+  if ((!last || !last.name) && servedMode) {
+    try {
+      const r = await fetch("api/list", { cache: "no-store" });
+      if (r.ok) {
+        const xmls = await r.json();
+        if (xmls.length === 1) last = { name: xmls[0].name }; // size/mtime unknown -> differs -> reimport
+      }
+    } catch {}
+  }
+  if (!last || !last.name) return;
+  try {
+    let text = null, meta = null;
+    if (servedMode) {
+      const r = await fetch("api/list", { cache: "no-store" });
+      if (!r.ok) return;
+      const f = (await r.json()).find((x) => x.name === last.name);
+      if (!f) return;
+      if (f.size === last.size && (f.mtime === undefined || f.mtime === last.mtime)) return;
+      const t = await fetch(encodeURIComponent(f.name), { cache: "no-store" });
+      if (!t.ok) return;
+      text = await t.text();
+      meta = { size: f.size, mtime: f.mtime };
+    } else if (hasFSAccess) {
+      const handle = await idb.get("dir");
+      if (!handle) return;
+      if ((await handle.queryPermission({ mode: "read" })) !== "granted") return;
+      const fh = await handle.getFileHandle(last.name).catch(() => null);
+      if (!fh) return;
+      const file = await fh.getFile();
+      if (file.size === last.size && file.lastModified === last.mtime) return;
+      text = await file.text();
+      meta = { size: file.size, mtime: file.lastModified };
+    } else return;
+    if (!text || !looksLikeYoudao(text)) return;
+    const prevCount = words.length;
+    const keepWord = current() ? current().word : null;
+    if (importText(text, last.name, meta, keepWord)) {
+      toast("Wordbook refreshed from " + last.name + ": " + words.length + " words (was " + prevCount + ")");
+    }
+  } catch {}
+}
+
+/* ---------------- folder scanning ---------------- */
+const hasFSAccess = "showDirectoryPicker" in window;
+/* When launched via EngRem.bat the page is served over http by server.js,
+   which exposes /api/list — then the app's own folder is scanned with no picker. */
+const servedMode = location.protocol === "http:" || location.protocol === "https:";
+
+async function scanServer() {
+  const note = document.getElementById("folderNote");
+  document.getElementById("folderName").textContent = "— current folder";
+  note.textContent = "Scanning…";
+  let files;
+  try {
+    const r = await fetch("api/list", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    files = await r.json();
+  } catch (e) {
+    note.textContent = "Could not list the folder (" + e.message + "). Use drag & drop below instead.";
+    return;
+  }
+  const entries = [];
+  for (const f of files) {
+    try {
+      const r = await fetch(encodeURIComponent(f.name), { cache: "no-store" });
+      if (!r.ok) continue;
+      const text = await r.text();
+      if (!looksLikeYoudao(text)) continue;
+      entries.push({ name: f.name, size: f.size, count: countUniqueWords(text), text,
+        meta: { size: f.size, mtime: f.mtime } });
+    } catch {}
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  renderXmlList(entries);
+}
+
+const idb = {
+  _db: null,
+  _open: () => new Promise((res, rej) => {
+    if (idb._db) return res(idb._db);
+    const r = indexedDB.open("engrem", 3);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
+      if (!db.objectStoreNames.contains("ex")) db.createObjectStore("ex", { keyPath: "word" });
+      if (!db.objectStoreNames.contains("audio")) db.createObjectStore("audio", { keyPath: "word" });
+    };
+    r.onsuccess = () => { idb._db = r.result; res(r.result); };
+    r.onerror = () => rej(r.error);
+  }),
+  get: async (k) => {
+    const db = await idb._open();
+    return new Promise((res, rej) => {
+      const t = db.transaction("kv").objectStore("kv").get(k);
+      t.onsuccess = () => res(t.result);
+      t.onerror = () => rej(t.error);
+    });
+  },
+  set: async (k, v) => {
+    const db = await idb._open();
+    return new Promise((res, rej) => {
+      const t = db.transaction("kv", "readwrite").objectStore("kv").put(v, k);
+      t.onsuccess = () => res();
+      t.onerror = () => rej(t.error);
+    });
+  },
+  exGet: async (word) => {
+    const db = await idb._open();
+    return new Promise((res, rej) => {
+      const t = db.transaction("ex").objectStore("ex").get(word);
+      t.onsuccess = () => res(t.result || null);
+      t.onerror = () => rej(t.error);
+    });
+  },
+  exSet: async (rec) => {
+    const db = await idb._open();
+    return new Promise((res, rej) => {
+      const t = db.transaction("ex", "readwrite").objectStore("ex").put(rec);
+      t.onsuccess = () => res();
+      t.onerror = () => rej(t.error);
+    });
+  },
+  audioGet: async (word) => {
+    const db = await idb._open();
+    return new Promise((res, rej) => {
+      const t = db.transaction("audio").objectStore("audio").get(word);
+      t.onsuccess = () => res(t.result || null);
+      t.onerror = () => rej(t.error);
+    });
+  },
+  audioSet: async (rec) => {
+    const db = await idb._open();
+    return new Promise((res, rej) => {
+      const t = db.transaction("audio", "readwrite").objectStore("audio").put(rec);
+      t.onsuccess = () => res();
+      t.onerror = () => rej(t.error);
+    });
+  },
+};
+
+let dirHandle = null;
+
+function fmtSize(n) {
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+  if (n >= 1024) return Math.round(n / 1024) + " KB";
+  return n + " B";
+}
+
+function renderXmlList(entries) {
+  const ul = document.getElementById("xmlList");
+  const note = document.getElementById("folderNote");
+  ul.innerHTML = "";
+  if (!entries.length) {
+    note.textContent = "No Youdao-format XML files found in this folder.";
+    return;
+  }
+  note.textContent = "Click a file to import it.";
+  for (const en of entries) {
+    const li = document.createElement("li");
+    li.innerHTML = '<span class="fname">📄 ' + esc(en.name) + "</span>" +
+      '<span class="fmeta">' + en.count + " words · " + fmtSize(en.size) + "</span>";
+    li.addEventListener("click", () => importText(en.text, en.name, en.meta));
+    ul.appendChild(li);
+  }
+}
+
+async function scanHandle(handle) {
+  const note = document.getElementById("folderNote");
+  document.getElementById("folderName").textContent = "— " + handle.name;
+  note.textContent = "Scanning…";
+  const entries = [];
+  try {
+    for await (const entry of handle.values()) {
+      if (entry.kind !== "file" || !/\.xml$/i.test(entry.name)) continue;
+      try {
+        const file = await entry.getFile();
+        if (file.size > 30 * 1048576) continue;
+        const text = await file.text();
+        if (!looksLikeYoudao(text)) continue;
+        entries.push({ name: entry.name, size: file.size, count: countUniqueWords(text), text,
+          meta: { size: file.size, mtime: file.lastModified } });
+      } catch {}
+    }
+  } catch (e) {
+    note.textContent = "Could not read folder: " + e.message;
+    return;
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  renderXmlList(entries);
+}
+
+async function scanFileList(fileList) {
+  document.getElementById("folderNote").textContent = "Scanning…";
+  const entries = [];
+  for (const file of fileList) {
+    if (!/\.xml$/i.test(file.name)) continue;
+    if (file.webkitRelativePath && file.webkitRelativePath.split("/").length > 2) continue; // top level only
+    try {
+      const text = await file.text();
+      if (!looksLikeYoudao(text)) continue;
+      entries.push({ name: file.name, size: file.size, count: countUniqueWords(text), text,
+        meta: { size: file.size, mtime: file.lastModified } });
+    } catch {}
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name));
+  renderXmlList(entries);
+}
+
+async function pickFolder() {
+  if (servedMode) { await scanServer(); return; }
+  if (hasFSAccess) {
+    try {
+      const handle = await window.showDirectoryPicker({ id: "engrem", mode: "read" });
+      dirHandle = handle;
+      try { await idb.set("dir", handle); } catch {}
+      await scanHandle(handle);
+    } catch (e) {
+      if (e && e.name !== "AbortError") {
+        document.getElementById("folderNote").textContent = "Folder access failed: " + e.message;
+      }
+    }
+  } else {
+    document.getElementById("dirInput").click();
+  }
+}
+
+/* file:// mode only: if the EngRem server is also running, offer a one-click jump to it. */
+async function probeLocalServer() {
+  for (const port of [8017, 8018, 8019, 8020]) {
+    try {
+      // no-cors: we only need "did it connect", not the response body
+      await fetch("http://127.0.0.1:" + port + "/api/list", { mode: "no-cors", signal: AbortSignal.timeout(900) });
+      if (document.getElementById("serverHint")) return;
+      const note = document.getElementById("folderNote");
+      const div = document.createElement("div");
+      div.id = "serverHint";
+      div.style.marginTop = ".5rem";
+      div.innerHTML = '✅ The EngRem server is running — <a href="http://127.0.0.1:' + port +
+        '/" style="color:var(--accent)">open the app there</a> for automatic folder scanning.';
+      note.parentElement.insertBefore(div, note.nextSibling);
+      return;
+    } catch {}
+  }
+}
+
+/* On load, try to restore the previously granted folder so the list appears automatically. */
+async function tryAutoScan() {
+  const note = document.getElementById("folderNote");
+  if (servedMode) { await scanServer(); return; }
+  probeLocalServer();
+  const batTip = " Tip: start the app with EngRem.bat instead — the folder is then scanned automatically, with no permission prompts.";
+  if (!hasFSAccess) {
+    note.textContent = "Pick the folder that contains this page (e.g. the one with your exported XML files)." + batTip;
+    return;
+  }
+  try {
+    const handle = await idb.get("dir");
+    if (!handle) {
+      note.textContent = 'Click "Scan folder…" once and pick the folder containing this page — its Youdao XML files will be listed here. The browser requires this one-time step for pages opened from disk.' + batTip;
+      return;
+    }
+    dirHandle = handle;
+    const perm = await handle.queryPermission({ mode: "read" });
+    if (perm === "granted") {
+      await scanHandle(handle);
+    } else {
+      document.getElementById("folderName").textContent = "— " + handle.name;
+      note.innerHTML = "";
+      const b = document.createElement("button");
+      b.className = "btn";
+      b.textContent = "🔓 Re-open “" + handle.name + "”";
+      b.addEventListener("click", async () => {
+        try {
+          const p = await handle.requestPermission({ mode: "read" });
+          if (p === "granted") await scanHandle(handle);
+        } catch (e) {
+          note.textContent = "Could not re-open folder: " + e.message;
+        }
+      });
+      note.appendChild(b);
+      note.appendChild(document.createTextNode(" The browser needs one click to re-grant folder access."));
+    }
+  } catch {
+    note.textContent = 'Click "Scan folder…" and pick the folder containing your exported XML files.';
+  }
+}
+
+/* ---------------- ordering / filtering ---------------- */
+function rebuildOrder(resetPos) {
+  const curIdx = order[pos];
+  order = [];
+  for (let i = 0; i < words.length; i++) {
+    if (hideFamiliar && familiar.has(words[i].word)) continue;
+    order.push(i);
+  }
+  if (shuffled) {
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+  }
+  if (resetPos) pos = 0;
+  else {
+    const p = order.indexOf(curIdx);
+    pos = p >= 0 ? p : Math.min(pos, Math.max(0, order.length - 1));
+  }
+  saveState();
+}
+
+function current() { return order.length ? words[order[pos]] : null; }
+
+function saveState() {
+  saveJSON(LS.state, { pos, mode, shuffled, hideFamiliar, autoSpeak, order });
+}
+
+/* ---------------- rendering ---------------- */
+const $ = (id) => document.getElementById(id);
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function render() {
+  const entry = current();
+  const wordLine = $("wordLine"), phon = $("phonetic"), answer = $("answer");
+  if (!entry) {
+    $("counter").textContent = "No words match the current filters";
+    wordLine.textContent = ""; phon.textContent = ""; answer.classList.add("hidden");
+    $("revealBtn").classList.add("hidden");
+    $("exList").innerHTML = ""; $("exStatus").textContent = ""; $("exLinks").innerHTML = "";
+    return;
+  }
+  $("counter").textContent = (pos + 1) + " / " + order.length +
+    (familiar.has(entry.word) ? "　·　known" : "");
+
+  if (mode === "en2zh") {
+    wordLine.className = "";
+    wordLine.textContent = entry.word;
+    phon.textContent = entry.phonetic || "";
+    answer.innerHTML = esc(entry.trans || "(no translation)");
+  } else {
+    wordLine.className = "zh";
+    wordLine.textContent = entry.trans || "(no translation)";
+    phon.textContent = "";
+    answer.innerHTML = '<span class="en-answer">' + esc(entry.word) + "</span>" +
+      (entry.phonetic ? '<div style="text-align:center;color:var(--muted)">' + esc(entry.phonetic) + "</div>" : "");
+  }
+  answer.classList.toggle("hidden", !revealed);
+  $("revealBtn").classList.toggle("hidden", revealed);
+  $("revealBtn").textContent = "Show Answer";
+  $("famBtn").classList.toggle("familiar", familiar.has(entry.word));
+  $("famBtn").textContent = familiar.has(entry.word) ? "✓ Known ✔" : "✓ Known";
+  renderExamples();
+  updateListHighlight();
+}
+
+function setRevealed(v) {
+  revealed = v;
+  const entry = current();
+  if (!entry) return;
+  $("answer").classList.toggle("hidden", !revealed);
+  $("revealBtn").classList.toggle("hidden", revealed);
+  renderExamples();
+  // in ZH→EN the word is the hidden answer, so only speak once it is revealed
+  if (v && autoSpeak && mode === "zh2en") speak();
+}
+
+/* ---------------- example sentences ---------------- */
+let exToken = 0; // guards against out-of-order async responses
+
+/* Three-layer cache: in-memory Map -> IndexedDB -> (served mode) server disk cache.
+   null means "never fetched successfully"; an empty array is a valid cached result. */
+const exMem = new Map();      // word -> sentences
+const exInflight = new Map(); // word -> Promise<sentences|null>
+
+async function getCachedExamples(word) {
+  if (exMem.has(word)) return exMem.get(word);
+  try {
+    const rec = await idb.exGet(word);
+    if (rec && Array.isArray(rec.sentences)) {
+      exMem.set(word, rec.sentences);
+      return rec.sentences;
+    }
+  } catch {}
+  return null;
+}
+
+/* Cache-or-fetch with in-flight dedup. Returns sentences, or null on network failure. */
+async function loadExamples(word) {
+  const cached = await getCachedExamples(word);
+  if (cached !== null) return cached;
+  if (exInflight.has(word)) return exInflight.get(word);
+  const p = (async () => {
+    try {
+      const res = await fetchExamples(word);
+      if (res.ok) {
+        exMem.set(word, res.sentences);
+        idb.exSet({ word, sentences: res.sentences, ts: Date.now() }).catch(() => {});
+        return res.sentences;
+      }
+      return null;
+    } catch { return null; }
+    finally { exInflight.delete(word); }
+  })();
+  exInflight.set(word, p);
+  return p;
+}
+
+/* Warm the cache for neighbours so arrow-key switching is instant. */
+function prefetchAround() {
+  if (!order.length) return;
+  const cur = current();
+  const targets = [1, 2, 3, -1]
+    .map((d) => words[order[(pos + d + order.length) % order.length]].word)
+    .filter((w, i, a) => a.indexOf(w) === i && (!cur || w !== cur.word));
+  (async () => {
+    for (const w of targets) {
+      if (!exMem.has(w)) await loadExamples(w); // sequential — gentle on the APIs
+      if (!audioMem.has(w)) await ensureAudioCached(w);
+    }
+  })();
+}
+
+function wordVariantsRegex(word) {
+  const w = word.trim();
+  if (!w) return null;
+  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (/\s/.test(w)) return new RegExp("\\b" + escRe(w).replace(/\s+/g, "\\s+") + "\\b", "gi");
+  const v = new Set([w, w + "s", w + "es", w + "ed", w + "d", w + "ing"]);
+  if (w.length > 2) {
+    if (w.endsWith("e")) { const st = w.slice(0, -1); v.add(st + "ing"); v.add(st + "ed"); }
+    if (w.endsWith("y")) { const st = w.slice(0, -1); v.add(st + "ies"); v.add(st + "ied"); v.add(st + "ier"); v.add(st + "iest"); }
+    const last = w[w.length - 1];
+    if (/[bdgklmnprtv]/.test(last) && /[aeiou]/.test(w[w.length - 2]) && !/[aeiou]/.test(w[w.length - 3] || "x")) {
+      v.add(w + last + "ing"); v.add(w + last + "ed");
+    }
+  }
+  const parts = [...v].sort((a, b) => b.length - a.length).map(escRe);
+  return new RegExp("\\b(" + parts.join("|") + ")\\b", "gi");
+}
+
+function decorateSentence(sentence, word) {
+  const re = wordVariantsRegex(word);
+  const blank = mode === "zh2en" && !revealed;
+  let html = "", last = 0;
+  if (re) {
+    for (const m of sentence.matchAll(re)) {
+      html += esc(sentence.slice(last, m.index));
+      html += blank
+        ? '<span class="w-blank">' + "_".repeat(Math.max(6, m[0].length)) + "</span>"
+        : '<span class="w-hit">' + esc(m[0]) + "</span>";
+      last = m.index + m[0].length;
+    }
+  }
+  html += esc(sentence.slice(last));
+  return html;
+}
+
+/* Returns {ok, sentences}. ok=false means network failure — don't cache that. */
+async function fetchExamples(word) {
+  // Served mode: the local server fetches and keeps a disk cache shared by all browsers.
+  if (servedMode) {
+    try {
+      const r = await fetch("api/examples?word=" + encodeURIComponent(word));
+      if (r.ok) {
+        const data = await r.json();
+        if (data && Array.isArray(data.sentences)) return { ok: data.ok !== false, sentences: data.sentences };
+      }
+    } catch {}
+    // endpoint missing/broken — fall through to direct fetch
+  }
+  let okAny = false;
+  const sentences = [];
+  const seen = new Set();
+  const push = (s, src) => {
+    s = s.replace(/\s+/g, " ").trim();
+    if (!s || s.length < 8 || s.length > 220) return;
+    const k = s.toLowerCase();
+    if (seen.has(k)) return;
+    seen.add(k);
+    sentences.push({ text: s, src });
+  };
+  // 1) Free Dictionary API
+  try {
+    const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(word));
+    if (r.ok || r.status === 404) okAny = true; // 404 = word simply not in that dictionary
+    if (r.ok) {
+      const data = await r.json();
+      for (const entry of Array.isArray(data) ? data : []) {
+        for (const m of entry.meanings || []) {
+          for (const d of m.definitions || []) {
+            if (d.example) push(d.example, "dict");
+          }
+        }
+      }
+    }
+  } catch {}
+  // 2) Tatoeba (real-world sentences)
+  if (sentences.length < 5) {
+    try {
+      const u = "https://api.tatoeba.org/unstable/sentences?lang=eng&q=" +
+        encodeURIComponent('"' + word + '"') + "&sort=relevance&limit=8";
+      const r = await fetch(u);
+      if (r.ok) {
+        okAny = true;
+        const data = await r.json();
+        for (const s of data.data || []) push(s.text, "tatoeba");
+      }
+    } catch {}
+  }
+  // keep only sentences actually containing the word (Tatoeba search can be fuzzy)
+  const re = wordVariantsRegex(word);
+  const hits = re ? sentences.filter((s) => { re.lastIndex = 0; return re.test(s.text); }) : sentences;
+  return { ok: okAny, sentences: (hits.length ? hits : sentences).slice(0, 5) };
+}
+
+function externalLinks(word) {
+  const q = encodeURIComponent(word);
+  return 'Look up: ' +
+    '<a href="https://youdao.com/result?word=' + q + '&lang=en" target="_blank" rel="noopener">Youdao</a>' +
+    '<a href="https://dictionary.cambridge.org/dictionary/english/' + q + '" target="_blank" rel="noopener">Cambridge</a>' +
+    '<a href="https://www.google.com/search?q=%22' + q + '%22+example+sentences" target="_blank" rel="noopener">Google examples</a>';
+}
+
+async function renderExamples() {
+  const entry = current();
+  if (!entry) return;
+  const word = entry.word;
+  const list = $("exList"), status = $("exStatus");
+  $("exLinks").innerHTML = externalLinks(word);
+  const token = ++exToken;
+
+  const draw = (sents) => {
+    if (token !== exToken) return;
+    list.innerHTML = "";
+    if (sents === null) {
+      status.textContent = "(network unavailable — examples could not be fetched)";
+      return;
+    }
+    if (sents.length === 0) {
+      status.textContent = "(no examples found — try the links below)";
+      return;
+    }
+    status.textContent = "";
+    for (const s of sents) {
+      const li = document.createElement("li");
+      li.innerHTML = decorateSentence(s.text, word) +
+        (s.src === "tatoeba" ? '<span class="src">Tatoeba</span>' : "");
+      list.appendChild(li);
+    }
+  };
+
+  const cached = await getCachedExamples(word);
+  if (token !== exToken) return;
+  if (cached !== null) {
+    draw(cached);
+    prefetchAround();
+    return;
+  }
+  list.innerHTML = "";
+  status.textContent = "Loading…";
+  const sents = await loadExamples(word);
+  if (token !== exToken) return;
+  draw(sents);
+  prefetchAround();
+}
+
+/* ---------------- navigation ---------------- */
+function go(delta) {
+  if (!order.length) return;
+  pos = (pos + delta + order.length) % order.length;
+  revealed = false;
+  saveState();
+  render();
+  if (autoSpeak && mode === "en2zh") speak();
+}
+
+function toggleMode() {
+  mode = mode === "en2zh" ? "zh2en" : "en2zh";
+  revealed = false;
+  $("modeEn").classList.toggle("active", mode === "en2zh");
+  $("modeZh").classList.toggle("active", mode === "zh2en");
+  saveState();
+  render();
+}
+
+function toggleFamiliar() {
+  const entry = current();
+  if (!entry) return;
+  if (familiar.has(entry.word)) familiar.delete(entry.word);
+  else familiar.add(entry.word);
+  saveJSON(LS.familiar, [...familiar]);
+  if (hideFamiliar) { rebuildOrder(false); }
+  render();
+}
+
+/* ---------------- pronunciation (cached audio, TTS fallback) ---------------- */
+const audioMem = new Map();      // word -> Blob | "none"
+const audioInflight = new Map(); // word -> Promise
+
+function findAudioUrl(dictData) {
+  let first = "";
+  for (const entry of Array.isArray(dictData) ? dictData : []) {
+    for (const p of entry.phonetics || []) {
+      if (!p.audio) continue;
+      if (p.audio.includes("-us.")) return p.audio; // prefer US pronunciation
+      if (!first) first = p.audio;
+    }
+  }
+  return first;
+}
+
+/* Returns a Blob, "none" (definitively no recording — cached), or null (network failure). */
+async function ensureAudioCached(word) {
+  if (audioMem.has(word)) return audioMem.get(word);
+  try {
+    const rec = await idb.audioGet(word);
+    if (rec) {
+      const v = rec.none ? "none" : rec.blob;
+      audioMem.set(word, v);
+      return v;
+    }
+  } catch {}
+  if (audioInflight.has(word)) return audioInflight.get(word);
+  const p = (async () => {
+    try {
+      let blob = null, none = false;
+      if (servedMode) {
+        const r = await fetch("api/audio?word=" + encodeURIComponent(word));
+        if (r.ok) blob = await r.blob();
+        else if (r.status === 404) none = true; // server says: no recording exists
+        else return null;
+      } else {
+        // 1) Wikimedia Commons (official, CC-licensed; CORS-enabled so cacheable)
+        if (!/\s/.test(word)) {
+          try {
+            const wl = word.toLowerCase();
+            const titles = ["File:En-us-" + wl + ".ogg", "File:En-" + wl + ".ogg", "File:En-uk-" + wl + ".ogg"].join("|");
+            const cr = await fetch("https://commons.wikimedia.org/w/api.php?action=query&format=json&origin=*" +
+              "&prop=imageinfo&iiprop=url&titles=" + encodeURIComponent(titles));
+            if (cr.ok) {
+              const pages = Object.values(((await cr.json()).query || {}).pages || {});
+              const hit = pages.find((p) => p.imageinfo && p.imageinfo[0] && p.imageinfo[0].url);
+              if (hit) {
+                const ar = await fetch(hit.imageinfo[0].url);
+                if (ar.ok) blob = await ar.blob();
+              }
+            }
+          } catch {}
+        }
+        // 2) Free Dictionary API recordings
+        if (!blob) {
+          const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(word));
+          if (r.status === 404) none = true;
+          else if (!r.ok) return null;
+          else {
+            const url = findAudioUrl(await r.json());
+            if (!url) none = true;
+            else {
+              const ar = await fetch(url);
+              if (!ar.ok) return null;
+              blob = await ar.blob();
+            }
+          }
+        }
+      }
+      if (none || !blob || blob.size === 0) {
+        audioMem.set(word, "none");
+        idb.audioSet({ word, none: true, ts: Date.now() }).catch(() => {});
+        return "none";
+      }
+      audioMem.set(word, blob);
+      idb.audioSet({ word, blob, ts: Date.now() }).catch(() => {});
+      return blob;
+    } catch { return null; }
+    finally { audioInflight.delete(word); }
+  })();
+  audioInflight.set(word, p);
+  return p;
+}
+
+function ttsSpeak(word) {
+  if (!window.speechSynthesis) return;
+  const u = new SpeechSynthesisUtterance(word);
+  u.lang = "en-US";
+  speechSynthesis.cancel();
+  speechSynthesis.speak(u);
+}
+
+let playerUrl = null;
+const player = new Audio();
+async function speak() {
+  const entry = current();
+  if (!entry) return;
+  const word = entry.word;
+  const got = await ensureAudioCached(word);
+  const cur = current();
+  if (!cur || cur.word !== word) return; // user moved on while audio loaded
+  const onPlayError = (e) => {
+    // NotAllowedError = browser autoplay policy before the first user gesture.
+    // Intentionally stay silent: a voice right on page load would startle the
+    // user. Speech starts naturally from the first interaction onward.
+    if (!e || e.name !== "NotAllowedError") ttsSpeak(word);
+  };
+  if (got instanceof Blob) {
+    if (playerUrl) URL.revokeObjectURL(playerUrl);
+    playerUrl = URL.createObjectURL(got);
+    player.onerror = null;
+    player.src = playerUrl;
+    player.play().catch(onPlayError);
+  } else if (!servedMode) {
+    // file:// mode can't cache cross-origin audio, but direct playback still works
+    if (playerUrl) { URL.revokeObjectURL(playerUrl); playerUrl = null; }
+    player.onerror = () => ttsSpeak(word);
+    player.src = "https://dict.youdao.com/dictvoice?audio=" + encodeURIComponent(word) + "&type=2";
+    player.play().catch(onPlayError);
+  } else {
+    ttsSpeak(word); // offline — synthesized voice still works
+  }
+}
+
+/* ---------------- word list drawer ---------------- */
+function renderList() {
+  const ul = $("listItems");
+  const q = $("listSearch").value.trim().toLowerCase();
+  ul.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  order.forEach((wi, oi) => {
+    const w = words[wi];
+    if (q && !w.word.toLowerCase().includes(q) && !(w.trans || "").toLowerCase().includes(q)) return;
+    const li = document.createElement("li");
+    li.dataset.oi = oi;
+    if (oi === pos) li.className = "current";
+    li.innerHTML = "<span>" + esc(w.word) + "</span>" + (familiar.has(w.word) ? '<span class="fam">✓</span>' : "");
+    frag.appendChild(li);
+  });
+  ul.appendChild(frag);
+}
+function updateListHighlight() {
+  if (!$("listPanel").classList.contains("open")) return;
+  renderList();
+  const cur = $("listItems").querySelector(".current");
+  if (cur) cur.scrollIntoView({ block: "nearest" });
+}
+
+/* ---------------- screens ---------------- */
+function showStudy() {
+  $("importScreen").classList.add("hidden");
+  $("studyWrap").classList.remove("hidden");
+  render();
+}
+function showImport() {
+  $("studyWrap").classList.add("hidden");
+  $("importScreen").classList.remove("hidden");
+  $("backRow").classList.toggle("hidden", words.length === 0);
+  $("importStatus").textContent = "";
+  $("scanBtn").textContent = servedMode ? "🔄 Rescan" : "📁 Scan folder…";
+  tryAutoScan();
+}
+
+/* ---------------- events ---------------- */
+$("fileInput").addEventListener("change", (e) => { if (e.target.files[0]) importFile(e.target.files[0]); e.target.value = ""; });
+$("dirInput").addEventListener("change", (e) => { if (e.target.files.length) scanFileList([...e.target.files]); e.target.value = ""; });
+$("scanBtn").addEventListener("click", pickFolder);
+$("importBtn").addEventListener("click", showImport);
+$("backBtn").addEventListener("click", showStudy);
+
+const dz = $("dropZone");
+dz.addEventListener("click", () => $("fileInput").click());
+dz.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("fileInput").click(); } });
+document.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+document.addEventListener("dragleave", (e) => { if (e.target === document.documentElement || !e.relatedTarget) dz.classList.remove("drag"); });
+document.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dz.classList.remove("drag");
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) {
+    if ($("importScreen").classList.contains("hidden")) showImport();
+    importFile(f);
+  }
+});
+
+$("revealBtn").addEventListener("click", () => setRevealed(true));
+$("prevBtn").addEventListener("click", () => go(-1));
+$("nextBtn").addEventListener("click", () => go(1));
+$("famBtn").addEventListener("click", toggleFamiliar);
+$("speakBtn").addEventListener("click", speak);
+$("modeEn").addEventListener("click", () => { if (mode !== "en2zh") toggleMode(); });
+$("modeZh").addEventListener("click", () => { if (mode !== "zh2en") toggleMode(); });
+$("shuffleBtn").addEventListener("click", () => {
+  shuffled = !shuffled;
+  $("shuffleBtn").classList.toggle("toggled", shuffled);
+  rebuildOrder(true);
+  revealed = false;
+  render();
+  toast(shuffled ? "Shuffle on" : "Original order restored");
+});
+$("autoSpeakBtn").addEventListener("click", () => {
+  autoSpeak = !autoSpeak;
+  $("autoSpeakBtn").classList.toggle("toggled", autoSpeak);
+  saveState();
+  toast(autoSpeak ? "Auto-pronounce on" : "Auto-pronounce off");
+  if (autoSpeak && !$("studyWrap").classList.contains("hidden") && (mode === "en2zh" || revealed)) speak();
+});
+$("hideFamBtn").addEventListener("click", () => {
+  hideFamiliar = !hideFamiliar;
+  $("hideFamBtn").classList.toggle("toggled", hideFamiliar);
+  rebuildOrder(false);
+  revealed = false;
+  render();
+});
+/* Bulk-download examples for the whole wordbook into the local cache. */
+let bulkRunning = false;
+$("cacheAllBtn").addEventListener("click", async () => {
+  if (bulkRunning) { bulkRunning = false; return; }
+  if (!words.length) { toast("Import a wordbook first"); return; }
+  bulkRunning = true;
+  const btn = $("cacheAllBtn");
+  const total = words.length;
+  let done = 0, failed = 0;
+  for (const w of words) {
+    if (!bulkRunning) break;
+    const hadCache = (await getCachedExamples(w.word)) !== null;
+    if (!hadCache) {
+      const s = await loadExamples(w.word);
+      if (s === null) failed++;
+      await new Promise((r) => setTimeout(r, 120)); // be gentle on the APIs
+    }
+    const a = await ensureAudioCached(w.word);
+    if (a === null) failed++;
+    done++;
+    if (done % 5 === 0 || done === total) btn.textContent = "⏸ " + done + "/" + total;
+  }
+  const stopped = !bulkRunning;
+  bulkRunning = false;
+  btn.textContent = "⬇ Examples";
+  toast(stopped
+    ? "Caching paused at " + done + "/" + total
+    : "Example cache complete" + (failed ? " (" + failed + " words failed — likely network)" : ""));
+});
+
+$("listBtn").addEventListener("click", () => {
+  const p = $("listPanel");
+  p.classList.toggle("open");
+  if (p.classList.contains("open")) renderList();
+});
+$("listSearch").addEventListener("input", renderList);
+$("listItems").addEventListener("click", (e) => {
+  const li = e.target.closest("li");
+  if (!li) return;
+  pos = +li.dataset.oi;
+  revealed = false;
+  saveState();
+  render();
+});
+
+document.addEventListener("keydown", (e) => {
+  if ($("studyWrap").classList.contains("hidden")) return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA")) return;
+  switch (e.key) {
+    case " ": e.preventDefault(); setRevealed(!revealed); break;
+    case "ArrowRight": e.preventDefault(); go(1); break;
+    case "ArrowLeft": e.preventDefault(); go(-1); break;
+    case "m": case "M": toggleMode(); break;
+    case "s": case "S": $("shuffleBtn").click(); break;
+    case "f": case "F": toggleFamiliar(); break;
+    case "p": case "P": speak(); break;
+    case "a": case "A": $("autoSpeakBtn").click(); break;
+    case "l": case "L": $("listBtn").click(); break;
+  }
+});
+
+let toastTimer;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+/* ---------------- init ---------------- */
+(function init() {
+  words = loadJSON(LS.words, []);
+  familiar = new Set(loadJSON(LS.familiar, []));
+  // one-time migration of the old localStorage example cache into IndexedDB
+  const legacyEx = loadJSON(LS.exCache, null);
+  if (legacyEx) {
+    (async () => {
+      for (const [w, s] of Object.entries(legacyEx)) {
+        if (Array.isArray(s)) { try { await idb.exSet({ word: w, sentences: s, ts: 0 }); } catch {} }
+      }
+      try { localStorage.removeItem(LS.exCache); } catch {}
+    })();
+  }
+  const st = loadJSON(LS.state, null);
+  if (st) {
+    mode = st.mode || "en2zh";
+    shuffled = !!st.shuffled;
+    hideFamiliar = !!st.hideFamiliar;
+    autoSpeak = !!st.autoSpeak;
+  }
+  $("modeEn").classList.toggle("active", mode === "en2zh");
+  $("modeZh").classList.toggle("active", mode === "zh2en");
+  $("shuffleBtn").classList.toggle("toggled", shuffled);
+  $("hideFamBtn").classList.toggle("toggled", hideFamiliar);
+  $("autoSpeakBtn").classList.toggle("toggled", autoSpeak);
+
+  if (words.length) {
+    if (st && Array.isArray(st.order) && st.order.length && st.order.every((i) => i >= 0 && i < words.length)) {
+      order = st.order;
+      pos = Math.min(st.pos || 0, order.length - 1);
+      // re-apply filters in case the known list changed elsewhere
+      if (!shuffled) rebuildOrder(false);
+    } else {
+      rebuildOrder(true);
+    }
+    showStudy();
+    checkForUpdatedWordbook(); // silently re-import if the source file changed on disk
+  } else {
+    showImport();
+  }
+})();
+</script>
+</body>
+</html>
