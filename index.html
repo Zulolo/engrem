@@ -914,16 +914,44 @@ function wordVariantsRegex(word) {
   return new RegExp("\\b(" + parts.join("|") + ")\\b", "gi");
 }
 
-function decorateSentence(sentence, word) {
-  const re = wordVariantsRegex(word);
+/* Locate the vocabulary word's core inside a matched token so only the core
+   gets blanked while affixes stay visible: "inadvertently" -> in______ly,
+   "thawed" -> ____ed. Returns [start, end) within the token, or null. */
+function coreSpan(token, word) {
+  const t = token.toLowerCase();
+  const cands = [...new Set([word.toLowerCase().trim(), ...lemmaCandidates(word)])]
+    .filter((c) => c.length >= 3)
+    .sort((a, b) => b.length - a.length);
+  for (const c of cands) {
+    let i = t.indexOf(c);
+    if (i >= 0) return [i, i + c.length];
+    if (c.length > 3 && (c.endsWith("e") || c.endsWith("y"))) {
+      const st = c.slice(0, -1); // hope -> hop(ing), study -> studi(es)
+      i = t.indexOf(st);
+      if (i >= 0) return [i, i + st.length];
+    }
+  }
+  return null;
+}
+
+function decorateSentence(sentence, word, rel) {
+  const re = wordVariantsRegex(rel || word);
   const blank = mode === "zh2en" && !revealed;
   let html = "", last = 0;
   if (re) {
     for (const m of sentence.matchAll(re)) {
       html += esc(sentence.slice(last, m.index));
-      html += blank
-        ? '<span class="w-blank">' + "_".repeat(Math.max(6, m[0].length)) + "</span>"
-        : '<span class="w-hit">' + esc(m[0]) + "</span>";
+      if (blank) {
+        // blank only the core of the vocabulary word; keep affixes visible
+        const span = coreSpan(m[0], word);
+        const s0 = span ? span[0] : 0;
+        const s1 = span ? span[1] : m[0].length;
+        html += esc(m[0].slice(0, s0)) +
+          '<span class="w-blank">' + "_".repeat(Math.max(4, s1 - s0)) + "</span>" +
+          esc(m[0].slice(s1));
+      } else {
+        html += '<span class="w-hit">' + esc(m[0]) + "</span>";
+      }
       last = m.index + m[0].length;
     }
   }
@@ -1078,7 +1106,7 @@ async function renderExamples() {
         const relText = (mode === "zh2en" && !revealed) ? "related form" : "≈ " + s.rel;
         label = relText + (srcName ? " · " + srcName : "");
       }
-      li.innerHTML = decorateSentence(s.text, s.rel || word) +
+      li.innerHTML = decorateSentence(s.text, word, s.rel) +
         (label ? '<span class="src">' + esc(label) + "</span>" : "");
       list.appendChild(li);
     }

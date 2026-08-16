@@ -40,8 +40,9 @@ also triggers the check.)
 - **EN → ZH mode**: shows the English word and phonetic; the Chinese translation is
   hidden until you click **Show Answer** or press `Space`.
 - **ZH → EN mode**: shows the Chinese translation with the English word hidden; in
-  example sentences the target word (including inflections such as *thawed*,
-  *thawing*) is replaced with `______` blanks until revealed, then highlighted.
+  example sentences only the word's core is blanked while affixes stay visible
+  as a grammatical hint — *thawed* shows as `____ed`, *inadvertently* as
+  `in______ly` — until revealed, then highlighted.
 - **Example sentences**: fetched automatically from the Free Dictionary API,
   Wiktionary, and Tatoeba, cached locally. Searches treat inflections as
   exchangeable — a word saved as *thawed* also searches and matches *thaw /
@@ -49,9 +50,9 @@ also triggers the check.)
   word (or an inflection of it) are shown. For words too rare for any corpus
   (e.g. *advertent*), the search falls back to close relatives (*inadvertent*,
   *advertently*) and labels those sentences "≈ inadvertent" — in ZH→EN mode the
-  related word is blanked too and the label stays generic until you reveal, so
-  the answer never leaks. When nothing qualifies at all you get one-click
-  search links to Youdao / Cambridge / Google.
+  related word's core is blanked (`in______ly`) and the label stays generic
+  until you reveal, so the answer never leaks. When nothing qualifies at all
+  you get one-click search links to Youdao / Cambridge / Google.
 - **Fast, mostly-offline caching**:
   - Examples are stored in the browser's IndexedDB, so every word you have seen
     loads instantly and works offline.
