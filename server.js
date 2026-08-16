@@ -71,7 +71,7 @@ function findAudioUrl(dictData) {
   return first;
 }
 
-const UA = "EngRem/1.0 (open-source vocabulary app; https://github.com/)"; // Wikimedia asks for a descriptive User-Agent
+const UA = "EngRem/1.0 (+https://github.com/Zulolo/engrem)"; // Wikimedia asks for a descriptive User-Agent
 const AUDIO_MIME = { ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".wav": "audio/wav" };
 
 /* Wikimedia Commons hosts the human recordings behind Wiktionary (CC-licensed).
