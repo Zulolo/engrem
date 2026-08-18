@@ -7,7 +7,8 @@ NetEase Youdao Dictionary (网易有道翻译) and drills you with flashcard-sty
 
 **Recommended: double-click `EngRem.bat`.** It starts a tiny local server
 (`server.js`, requires [Node.js](https://nodejs.org/)) and opens the app in your
-browser. The import screen then automatically lists every Youdao-format XML file
+browser. The server prefers port 8017 but automatically walks past ports that
+are busy or reserved by Windows (set `ENGREM_PORT` to pin one yourself). The import screen then automatically lists every Youdao-format XML file
 in this folder — no folder dialog at all. Click a file to import it; click
 **Rescan** after adding new exports. Keep the console window open while studying.
 
@@ -46,8 +47,11 @@ also triggers the check.)
 - **Example sentences**: fetched automatically from the Free Dictionary API,
   Wiktionary, and Tatoeba, cached locally. Searches treat inflections as
   exchangeable — a word saved as *thawed* also searches and matches *thaw /
-  thaws / thawing*, and vice versa. Only sentences that genuinely contain the
-  word (or an inflection of it) are shown. For words too rare for any corpus
+  thaws / thawing*, and vice versa. The five shown sentences deliberately mix
+  distinct forms (base / *-ed* / *-ing* / *-s* / *-ly*) instead of repeating
+  one, and prefixed family members (*un-*, *in-*, *dis-*…) are searched and
+  included too — *happy* also gets an *unhappy* example. Only sentences that
+  genuinely contain the word (or a family member) are shown. For words too rare for any corpus
   (e.g. *advertent*), the search falls back to close relatives (*inadvertent*,
   *advertently*) and labels those sentences "≈ inadvertent" — in ZH→EN mode the
   related word's core is blanked (`in______ly`) and the label stays generic

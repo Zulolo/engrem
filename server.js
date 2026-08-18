@@ -12,7 +12,7 @@ const path = require("path");
 const { exec } = require("child_process");
 
 const ROOT = __dirname;
-const START_PORT = 8017;
+const START_PORT = parseInt(process.env.ENGREM_PORT, 10) || 8017;
 const CACHE_FILE = path.join(ROOT, "examples-cache.json");
 const AUDIO_DIR = path.join(ROOT, "audio-cache");
 const AUDIO_INDEX = path.join(AUDIO_DIR, "index.json");
@@ -31,7 +31,7 @@ const MIME = {
 /* ---------- example cache (disk-backed) ---------- */
 /* EX_SCHEMA versions the fetch logic: bump it when search/filter quality
    improves and every stale entry (including cached empties) refetches. */
-const EX_SCHEMA = 4;
+const EX_SCHEMA = 5;
 let exCache = {};
 try { exCache = JSON.parse(fs.readFileSync(CACHE_FILE, "utf-8")); } catch {}
 let cacheDirty = false;
@@ -172,7 +172,19 @@ function wordVariantsRegex(word) {
   const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   if (/\s/.test(w)) return new RegExp("\\b" + escRe(w).replace(/\s+/g, "\\s+") + "\\b", "gi");
   const forms = new Set();
-  for (const lem of lemmaCandidates(w)) for (const f of expandForms(lem)) forms.add(f);
+  const lems = lemmaCandidates(w);
+  for (const lem of lems) for (const f of expandForms(lem)) forms.add(f);
+  // prefixed relatives count as family too: happy -> unhappy, advertent ->
+  // inadvertent(ly); a word saved WITH a prefix also matches its bare form
+  for (const lem of lems) {
+    if (lem.length < 4) continue;
+    for (const p of ["un", "in", "im", "dis", "non", "ir", "il"]) {
+      if (lem.startsWith(p) && lem.length - p.length >= 4) {
+        for (const f of expandForms(lem.slice(p.length))) forms.add(f);
+      }
+    }
+    for (const p of ["un", "in"]) for (const f of expandForms(p + lem)) forms.add(f);
+  }
   const parts = [...forms].sort((a, b) => b.length - a.length).map(escRe);
   return new RegExp("\\b(" + parts.join("|") + ")\\b", "gi");
 }
@@ -190,6 +202,51 @@ async function fetchExamples(word) {
     }
   }
   return primary;
+}
+
+/* Classify which inflection family member a matched token is, so the final
+   pick can cover distinct forms (thaw / thawed / thawing) instead of five
+   sentences all using the same form. */
+function formKey(token, word) {
+  const t = token.toLowerCase();
+  const w = word.toLowerCase().trim();
+  let pre = "";
+  for (const p of ["in", "un", "im", "dis", "non", "ir", "il"]) {
+    if (t.startsWith(p) && !w.startsWith(p)) { pre = p + "+"; break; }
+  }
+  let suf = "other";
+  if (t === w) suf = "base";
+  else if (t.endsWith("ing")) suf = "ing";
+  else if (t.endsWith("ed")) suf = "ed";
+  else if (t.endsWith("ly")) suf = "ly";
+  else if (t.endsWith("s")) suf = "s";
+  return pre + suf;
+}
+
+/* Collect up to POOL candidates, then pick PICK maximizing form diversity. */
+const EX_POOL = 10, EX_PICK = 5;
+
+function pickDiverse(sentences, varRe, word) {
+  const withForm = sentences.map((s) => {
+    let form = "other";
+    if (varRe) {
+      varRe.lastIndex = 0;
+      const m = varRe.exec(s.text);
+      if (m) form = formKey(m[0], word);
+    }
+    return { s, form };
+  });
+  const picked = [];
+  const usedForms = new Set();
+  for (const e of withForm) {
+    if (picked.length >= EX_PICK) break;
+    if (!usedForms.has(e.form)) { usedForms.add(e.form); picked.push(e.s); }
+  }
+  for (const e of withForm) {
+    if (picked.length >= EX_PICK) break;
+    if (!picked.includes(e.s)) picked.push(e.s);
+  }
+  return picked;
 }
 
 /* One sweep over the sources for a single term. */
@@ -223,7 +280,7 @@ async function searchSentences(word) {
   const searchTerms = /\s/.test(word) ? [word] : [...new Set([word.toLowerCase(), ...lemmaCandidates(word)])].slice(0, 3);
   // 1) Free Dictionary API definition examples
   for (const term of searchTerms) {
-    if (sentences.length >= 5) break;
+    if (sentences.length >= EX_POOL) break;
     try {
       const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(term),
         { signal: AbortSignal.timeout(8000) });
@@ -242,7 +299,7 @@ async function searchSentences(word) {
   }
   // 2) Wiktionary usage examples
   for (const term of searchTerms) {
-    if (sentences.length >= 5) break;
+    if (sentences.length >= EX_POOL) break;
     try {
       const r = await fetch("https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(term) + "?redirect=true",
         { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) });
@@ -260,7 +317,7 @@ async function searchSentences(word) {
   }
   // 3) Tatoeba — unquoted, so its stemmed search covers inflections both ways
   for (const term of searchTerms.slice(0, 2)) {
-    if (sentences.length >= 5) break;
+    if (sentences.length >= EX_POOL) break;
     try {
       const u = "https://api.tatoeba.org/unstable/sentences?lang=eng&q=" +
         encodeURIComponent(term) + "&sort=relevance&limit=8";
@@ -272,8 +329,40 @@ async function searchSentences(word) {
       }
     } catch {}
   }
-  // already filtered at collection time — wrong-word examples never enter
-  return { ok: okAny, sentences: sentences.slice(0, 5) };
+  // 4) prefixed relatives (un-/in-): if the pool has no prefixed family
+  // member yet, spend up to two Tatoeba queries looking for ones so the pick
+  // can also offer "unhappy" / "inadvertently" alongside plain inflections
+  if (!/\s/.test(word)) {
+    const hasPrefixed = varRe && sentences.some((s) => {
+      varRe.lastIndex = 0;
+      const m = varRe.exec(s.text);
+      return m && formKey(m[0], word).includes("+");
+    });
+    if (!hasPrefixed) {
+      const w0 = word.toLowerCase().trim();
+      const prefixTerms = [];
+      for (const p of ["in", "un", "im", "dis", "non", "ir", "il"]) {
+        if (w0.startsWith(p) && w0.length - p.length >= 4) prefixTerms.push(w0.slice(p.length));
+      }
+      if (prefixTerms.length === 0 && w0.length >= 4) prefixTerms.push("in" + w0, "un" + w0);
+      const before = sentences.length;
+      for (const term of prefixTerms.slice(0, 2)) {
+        if (sentences.length - before >= 4) break;
+        try {
+          const r = await fetch("https://api.tatoeba.org/unstable/sentences?lang=eng&q=" +
+            encodeURIComponent(term) + "&sort=relevance&limit=8", { signal: AbortSignal.timeout(8000) });
+          if (r.ok) {
+            okAny = true;
+            const data = await r.json();
+            for (const s of (data && data.data) || []) push(s.text, "tatoeba");
+          }
+        } catch {}
+      }
+    }
+  }
+  // already filtered at collection time — wrong-word examples never enter;
+  // pick a mix of inflection forms rather than the first five in source order
+  return { ok: okAny, sentences: pickDiverse(sentences, varRe, word) };
 }
 
 /* ---------- http server ---------- */
@@ -429,11 +518,15 @@ const server = http.createServer(async (req, res) => {
 
 function listen(port) {
   server.once("error", (e) => {
-    if (e.code === "EADDRINUSE" && port < START_PORT + 20) listen(port + 1);
-    else { console.error("Failed to start server:", e.message); process.exit(1); }
+    // EACCES: Windows can reserve whole port ranges (Hyper-V/WinNAT), and the
+    // reserved ranges move around after a reboot — walk past them, and as a
+    // last resort take any free port (0 = OS-assigned)
+    if ((e.code === "EADDRINUSE" || e.code === "EACCES") && port !== 0) {
+      listen(port < START_PORT + 30 ? port + 1 : 0);
+    } else { console.error("Failed to start server:", e.message); process.exit(1); }
   });
   server.listen(port, "127.0.0.1", () => {
-    const url = "http://127.0.0.1:" + port + "/";
+    const url = "http://127.0.0.1:" + server.address().port + "/";
     console.log("EngRem is running at " + url);
     console.log("Example cache: " + CACHE_FILE + " (" + Object.keys(exCache).length + " words)");
     console.log("Keep this window open while studying; close it to stop.");
