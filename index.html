@@ -893,20 +893,31 @@ function expandForms(w) {
   return v;
 }
 
+/* Only these endings take un-/in- prefixes or -ly in practice; without this
+   filter a noun like "intercession" spawns doomed searches for
+   "inintercession" / "intercessionly" that cost whole request round-trips. */
+const ADJ_LIKE = /(ent|ant|able|ible|ive|ful|ous|ic|al|ar|id|ish|less|y|ed|ing)$/;
+
 /* Close morphological relatives, tried only when the word itself has no
-   examples anywhere (e.g. "advertent" -> "inadvertent"). Bogus candidates are
-   harmless: their searches return nothing and the loop moves on. */
+   examples anywhere (e.g. "advertent" -> "inadvertent"). */
 function relatedForms(word) {
   const w = word.toLowerCase().trim();
   if (/\s/.test(w) || w.length < 4) return [];
   const out = [];
-  const add = (x) => { if (x && x !== w && out.length < 4 && !out.includes(x)) out.push(x); };
-  for (const p of ["in", "un", "im", "dis", "non", "ir", "il"]) {
-    if (w.startsWith(p) && w.length - p.length >= 4) add(w.slice(p.length)); // inadvertent -> advertent
+  const add = (x) => { if (x && x !== w && out.length < 3 && !out.includes(x)) out.push(x); };
+  // strip a negation prefix only from adjective-like words: "inadvertent" ->
+  // "advertent" is real, while "intercession" -> "tercession" is garbage that
+  // used to cost a whole extra sweep
+  if (ADJ_LIKE.test(w)) {
+    for (const p of ["in", "un", "im", "dis", "non", "ir", "il"]) {
+      if (w.startsWith(p) && w.length - p.length >= 4) add(w.slice(p.length));
+    }
   }
-  add("in" + w); // advertent -> inadvertent
-  add("un" + w);
-  add(w.endsWith("y") ? w.slice(0, -1) + "ily" : w + "ly"); // -> advertently
+  if (ADJ_LIKE.test(w)) {
+    add("in" + w); // advertent -> inadvertent
+    add("un" + w);
+    add(w.endsWith("y") ? w.slice(0, -1) + "ily" : w + "ly"); // -> advertently
+  }
   return out;
 }
 
@@ -995,8 +1006,10 @@ async function fetchExamples(word) {
   const primary = await searchSentences(word);
   if (primary.ok && primary.sentences.length === 0) {
     // nothing anywhere — try close relatives (advertent -> inadvertent)
-    for (const rel of relatedForms(word)) {
-      const r = await searchSentences(rel);
+    // probe them all at once, so one dead end does not delay the next
+    const tried = await Promise.all(relatedForms(word).map((rel) =>
+      searchSentences(rel).then((r) => ({ rel, r }), () => ({ rel, r: { sentences: [] } }))));
+    for (const { rel, r } of tried) {
       if (r.sentences.length) {
         return { ok: true, sentences: r.sentences.slice(0, 3).map((s) => ({ ...s, rel })) };
       }
@@ -1025,7 +1038,7 @@ function formKey(token, word) {
 }
 
 /* Collect up to POOL candidates, then pick PICK maximizing form diversity. */
-const EX_POOL = 10, EX_PICK = 5;
+const EX_PICK = 5;
 
 function pickDiverse(sentences, varRe, word) {
   const withForm = sentences.map((s) => {
@@ -1050,9 +1063,23 @@ function pickDiverse(sentences, varRe, word) {
   return picked;
 }
 
-/* One sweep over the sources for a single term. */
+/* Tatoeba is a small volunteer service and rate-limits bursts (HTTP 429, or
+   it simply stops answering). Space out request starts globally and back off
+   after a 429/timeout — without this a bulk cache run gets throttled, and then
+   every word waits out a timeout AND returns fewer sentences. */
+let tatoebaNextAt = 0, tatoebaCooldownUntil = 0;
+async function tatoebaGate() {
+  const now = Date.now();
+  const at = Math.max(now, tatoebaNextAt);
+  tatoebaNextAt = at + 350;
+  if (at > now) await new Promise((r) => setTimeout(r, at - now));
+}
+
+/* One sweep over the sources for a single term. Every upstream query runs
+   CONCURRENTLY: awaiting them one at a time made a single word take tens of
+   seconds, since each source waited out its own timeout before the next
+   started. Results merge in source-priority order, so the pick is unchanged. */
 async function searchSentences(word) {
-  let okAny = false;
   const sentences = [];
   const seen = new Set();
   // near-duplicate key: contraction- and punctuation-insensitive
@@ -1061,13 +1088,12 @@ async function searchSentences(word) {
     .split(/[^a-z0-9]+/)
     .filter((t) => t && !["is", "s", "are", "re", "am", "m", "not", "nt", "will", "ll", "have", "ve", "would", "d", "the", "a", "an"].includes(t))
     .join(" ");
-  // filter AT COLLECTION time: a sentence must contain the word (or an
-  // inflection) to count toward the 5-sentence quota — otherwise wrong-word
-  // results from one source (e.g. dict's "wilt" -> "will" entry) fill the
-  // quota and block the sources that have the real sentences
+  // a sentence must contain the word (or an inflection) to enter the pool —
+  // otherwise wrong-word results from one source (e.g. dict's "wilt" -> "will"
+  // entry) crowd out the sources that have the real sentences
   const varRe = wordVariantsRegex(word);
   const push = (s, src) => {
-    s = s.replace(/\s+/g, " ").trim();
+    s = String(s).replace(/\s+/g, " ").trim();
     if (!s || s.length < 8 || s.length > 220) return;
     if (varRe) { varRe.lastIndex = 0; if (!varRe.test(s)) return; }
     const k = exKey(s);
@@ -1076,92 +1102,97 @@ async function searchSentences(word) {
     sentences.push({ text: s, src });
   };
   const stripHtml = (h) => String(h).replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+  const TIMEOUT = 8000; // one slow source no longer delays the others
   // search with the word AND its base/inflected forms — a wordbook may store
   // "thawed" while the good sentences use "thaw" or "thawing"
   const searchTerms = /\s/.test(word) ? [word] : [...new Set([word.toLowerCase(), ...lemmaCandidates(word)])].slice(0, 3);
-  // 1) Free Dictionary API definition examples
-  for (const term of searchTerms) {
-    if (sentences.length >= EX_POOL) break;
+
+  const dictQuery = (term) => async () => {
+    const out = [];
     try {
-      const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(term));
-      if (r.ok || r.status === 404) okAny = true; // 404 = term simply not in that dictionary
+      const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(term),
+        { signal: AbortSignal.timeout(TIMEOUT) });
+      if (!(r.ok || r.status === 404)) return { ok: false, out }; // 404 = simply not in that dictionary
       if (r.ok) {
         const data = await r.json();
         for (const entry of Array.isArray(data) ? data : []) {
           for (const m of entry.meanings || []) {
-            for (const d of m.definitions || []) {
-              if (d.example) push(d.example, "dict");
-            }
+            for (const d of m.definitions || []) if (d.example) out.push([d.example, "dict"]);
           }
         }
       }
-    } catch {}
-  }
-  // 2) Wiktionary usage examples
-  for (const term of searchTerms) {
-    if (sentences.length >= EX_POOL) break;
+      return { ok: true, out };
+    } catch { return { ok: false, out }; }
+  };
+
+  const wiktQuery = (term) => async () => {
+    const out = [];
     try {
-      const r = await fetch("https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(term) + "?redirect=true");
-      if (r.ok || r.status === 404) okAny = true;
+      const r = await fetch("https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(term) + "?redirect=true",
+          { signal: AbortSignal.timeout(TIMEOUT) });
+      if (!(r.ok || r.status === 404)) return { ok: false, out };
       if (r.ok) {
         const data = await r.json();
         for (const sec of data.en || []) {
           for (const d of sec.definitions || []) {
-            for (const ex of d.parsedExamples || []) if (ex.example) push(stripHtml(ex.example), "wikt");
-            for (const ex of d.examples || []) push(stripHtml(ex), "wikt");
+            for (const ex of d.parsedExamples || []) if (ex.example) out.push([stripHtml(ex.example), "wikt"]);
+            for (const ex of d.examples || []) out.push([stripHtml(ex), "wikt"]);
           }
         }
       }
-    } catch {}
-  }
-  // 3) Tatoeba — unquoted, so its stemmed search covers inflections both ways
-  for (const term of searchTerms.slice(0, 2)) {
-    if (sentences.length >= EX_POOL) break;
+      return { ok: true, out };
+    } catch { return { ok: false, out }; }
+  };
+
+  const tatoebaQuery = (term) => async () => {
+    const out = [];
+    if (Date.now() < tatoebaCooldownUntil) return { ok: false, throttled: true, out };
     try {
-      const u = "https://api.tatoeba.org/unstable/sentences?lang=eng&q=" +
-        encodeURIComponent(term) + "&sort=relevance&limit=8";
-      const r = await fetch(u);
-      if (r.ok) {
-        okAny = true;
-        const data = await r.json();
-        for (const s of data.data || []) push(s.text, "tatoeba");
-      }
-    } catch {}
-  }
-  // 4) prefixed relatives (un-/in-): if the pool has no prefixed family
-  // member yet, spend up to two Tatoeba queries looking for ones so the pick
-  // can also offer "unhappy" / "inadvertently" alongside plain inflections
+      await tatoebaGate();
+      // unquoted, so Tatoeba's stemmed search covers inflections both ways
+      const r = await fetch("https://api.tatoeba.org/unstable/sentences?lang=eng&q=" +
+        encodeURIComponent(term) + "&sort=relevance&limit=8", { signal: AbortSignal.timeout(TIMEOUT) });
+      if (r.status === 429) { tatoebaCooldownUntil = Date.now() + 60000; return { ok: false, throttled: true, out }; }
+      if (!r.ok) return { ok: false, out };
+      const data = await r.json();
+      for (const s of (data && data.data) || []) out.push([s.text, "tatoeba"]);
+      return { ok: true, out };
+    } catch { tatoebaCooldownUntil = Date.now() + 30000; return { ok: false, throttled: true, out }; }
+  };
+
+  // prefixed relatives (un-/in-), so the pick can also offer family members
+  // like "unhappy" / "inadvertently" alongside plain inflections
+  const prefixTerms = [];
   if (!/\s/.test(word)) {
-    const hasPrefixed = varRe && sentences.some((s) => {
-      varRe.lastIndex = 0;
-      const m = varRe.exec(s.text);
-      return m && formKey(m[0], word).includes("+");
-    });
-    if (!hasPrefixed) {
-      const w0 = word.toLowerCase().trim();
-      const prefixTerms = [];
+    const w0 = word.toLowerCase().trim();
+    if (ADJ_LIKE.test(w0)) {
       for (const p of ["in", "un", "im", "dis", "non", "ir", "il"]) {
         if (w0.startsWith(p) && w0.length - p.length >= 4) prefixTerms.push(w0.slice(p.length));
       }
-      if (prefixTerms.length === 0 && w0.length >= 4) prefixTerms.push("in" + w0, "un" + w0);
-      const before = sentences.length;
-      for (const term of prefixTerms.slice(0, 2)) {
-        if (sentences.length - before >= 4) break;
-        try {
-          const r = await fetch("https://api.tatoeba.org/unstable/sentences?lang=eng&q=" +
-            encodeURIComponent(term) + "&sort=relevance&limit=8");
-          if (r.ok) {
-            okAny = true;
-            const data = await r.json();
-            for (const s of data.data || []) push(s.text, "tatoeba");
-          }
-        } catch {}
-      }
     }
+    if (!prefixTerms.length && w0.length >= 4 && ADJ_LIKE.test(w0)) prefixTerms.push("in" + w0, "un" + w0);
   }
-  // already filtered at collection time — wrong-word examples never enter;
-  // pick a mix of inflection forms rather than the first five in source order
-  return { ok: okAny, sentences: pickDiverse(sentences, varRe, word) };
+
+  // query order is merge order: dictionary, then Wiktionary, then Tatoeba
+  // Tatoeba search is already stemmed, so ONE query covers the inflections;
+  // extra terms only spent rate-limit budget for near-duplicate results
+  const queries = [
+    ...searchTerms.slice(0, 2).map(dictQuery),
+    ...searchTerms.slice(0, 2).map(wiktQuery),
+    ...searchTerms.slice(0, 1).map(tatoebaQuery),
+    ...prefixTerms.slice(0, 1).map(tatoebaQuery),
+  ];
+  const results = await Promise.all(queries.map((q) => q()));
+  let okAny = false, throttled = false;
+  for (const r of results) {
+    if (r.ok) okAny = true;
+    if (r.throttled) throttled = true;
+    for (const [text, src] of r.out) push(text, src);
+  }
+  // pick a mix of inflection forms rather than whatever came first
+  const picked = pickDiverse(sentences, varRe, word);
+  // never cache an empty result that a throttled source might have filled
+  return { ok: okAny && (picked.length > 0 || !throttled), sentences: picked };
 }
 
 function externalLinks(word) {

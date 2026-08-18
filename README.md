@@ -68,9 +68,13 @@ also triggers the check.)
   - The **⬇ Cache** button in the header downloads examples and pronunciation
     for the entire wordbook into the cache, a few words in parallel (click
     again to pause). The counter shows how many words already have cached
-    examples, so pausing and resuming continues from the real count. Expect a
-    long first run for a large wordbook — each word queries several sources —
-    but after one full run the app needs no network at all for studying.
+    examples, so pausing and resuming continues from the real count. Roughly
+    20 minutes for a 1500-word book; after one full run the app needs no
+    network at all for studying.
+  - Requests to Tatoeba are spaced out and backed off after a rate-limit
+    response, and a word whose sources were throttled is deliberately **not**
+    cached — so a temporary throttle never leaves a word permanently stuck
+    with no examples.
   - The **🧹 Clear cache** button deletes all cached examples and audio — both
     the browser's IndexedDB stores and, in server mode, the disk caches
     (`examples-cache.json`, `audio-cache/`). Words, study position, and
