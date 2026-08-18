@@ -516,6 +516,19 @@ const server = http.createServer(async (req, res) => {
   fs.createReadStream(full).pipe(res);
 });
 
+/* Registered ONCE — passing a callback to server.listen() on every retry
+   would stack one 'listening' listener per failed port, and all of them fire
+   together on the port that finally binds (log spam + one browser tab each). */
+server.on("listening", () => {
+  server.removeAllListeners("error");
+  server.on("error", (e) => console.error("Server error:", e.message));
+  const url = "http://127.0.0.1:" + server.address().port + "/";
+  console.log("EngRem is running at " + url);
+  console.log("Example cache: " + CACHE_FILE + " (" + Object.keys(exCache).length + " words)");
+  console.log("Keep this window open while studying; close it to stop.");
+  exec('start "" "' + url + '"'); // open default browser (Windows)
+});
+
 function listen(port) {
   server.once("error", (e) => {
     // EACCES: Windows can reserve whole port ranges (Hyper-V/WinNAT), and the
@@ -525,12 +538,6 @@ function listen(port) {
       listen(port < START_PORT + 30 ? port + 1 : 0);
     } else { console.error("Failed to start server:", e.message); process.exit(1); }
   });
-  server.listen(port, "127.0.0.1", () => {
-    const url = "http://127.0.0.1:" + server.address().port + "/";
-    console.log("EngRem is running at " + url);
-    console.log("Example cache: " + CACHE_FILE + " (" + Object.keys(exCache).length + " words)");
-    console.log("Keep this window open while studying; close it to stop.");
-    exec('start "" "' + url + '"'); // open default browser (Windows)
-  });
+  server.listen(port, "127.0.0.1");
 }
 listen(START_PORT);
