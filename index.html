@@ -1467,34 +1467,51 @@ $("hideFamBtn").addEventListener("click", () => {
   revealed = false;
   render();
 });
-/* Bulk-download examples for the whole wordbook into the local cache. */
+/* Bulk-download examples + audio for the whole wordbook into the local cache.
+   A few parallel workers keep it reasonably fast, and the counter shows how
+   many words HAVE cached examples — so pausing and resuming continues from
+   the real count instead of restarting at zero. */
 let bulkRunning = false;
+let bulkToken = 0;
 $("cacheAllBtn").addEventListener("click", async () => {
-  if (bulkRunning) { bulkRunning = false; return; }
+  if (bulkRunning) { bulkRunning = false; return; } // pause after in-flight words
   if (!words.length) { toast("Import a wordbook first"); return; }
   bulkRunning = true;
+  const myToken = ++bulkToken;
   const btn = $("cacheAllBtn");
   const total = words.length;
-  let done = 0, failed = 0;
+
+  // establish the true starting point: how many words are already cached
+  btn.textContent = "⏸ …/" + total;
+  let covered = 0, failed = 0;
   for (const w of words) {
-    if (!bulkRunning) break;
-    const hadCache = (await getCachedExamples(w.word)) !== null;
-    if (!hadCache) {
-      const s = await loadExamples(w.word);
-      if (s === null) failed++;
-      await new Promise((r) => setTimeout(r, 120)); // be gentle on the APIs
-    }
-    const a = await ensureAudioCached(w.word);
-    if (a === null) failed++;
-    done++;
-    if (done % 5 === 0 || done === total) btn.textContent = "⏸ " + done + "/" + total;
+    if ((await getCachedExamples(w.word)) !== null) covered++;
   }
-  const stopped = !bulkRunning;
+  const draw = () => { btn.textContent = "⏸ " + covered + "/" + total; };
+  draw();
+
+  let idx = 0;
+  const worker = async () => {
+    while (bulkRunning && bulkToken === myToken && idx < words.length) {
+      const word = words[idx++].word;
+      if ((await getCachedExamples(word)) === null) {
+        const s = await loadExamples(word);
+        if (s === null) failed++; else covered++;
+        draw();
+      }
+      if ((await ensureAudioCached(word)) === null) failed++;
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, worker));
+
+  if (bulkToken !== myToken) return; // a newer run owns the button now
+  const paused = !bulkRunning;
   bulkRunning = false;
-  btn.textContent = "⬇ Examples";
-  toast(stopped
-    ? "Caching paused at " + done + "/" + total
-    : "Example cache complete" + (failed ? " (" + failed + " words failed — likely network)" : ""));
+  btn.textContent = "⬇ Cache";
+  toast(paused
+    ? "Caching paused — " + covered + "/" + total + " words have examples"
+    : "Cache complete: " + covered + "/" + total + " words have examples" +
+      (failed ? " (" + failed + " fetches failed — likely network or rate limits)" : ""));
 });
 
 $("clearCacheBtn").addEventListener("click", async () => {

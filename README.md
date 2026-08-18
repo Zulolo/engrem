@@ -66,8 +66,11 @@ also triggers the check.)
     (`examples-cache.json`), shared by all browsers; each word hits the public
     APIs at most once, ever.
   - The **⬇ Cache** button in the header downloads examples and pronunciation
-    for the entire wordbook into the cache (click again to pause). After one
-    full run the app needs no network at all for studying.
+    for the entire wordbook into the cache, a few words in parallel (click
+    again to pause). The counter shows how many words already have cached
+    examples, so pausing and resuming continues from the real count. Expect a
+    long first run for a large wordbook — each word queries several sources —
+    but after one full run the app needs no network at all for studying.
   - The **🧹 Clear cache** button deletes all cached examples and audio — both
     the browser's IndexedDB stores and, in server mode, the disk caches
     (`examples-cache.json`, `audio-cache/`). Words, study position, and
