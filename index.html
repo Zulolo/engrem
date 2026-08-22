@@ -315,6 +315,14 @@ function countUniqueWords(text) {
   return s.size;
 }
 
+/* Youdao saves words exactly as typed into the search box, so ordinary words
+   can come back capitalised ("Inflection"). Undo that — but only when the rest
+   of the word is lowercase, so acronyms ("NASA") and names ("McDonald") keep
+   their capitals. */
+function normalizeWordCase(w) {
+  return /^[A-Z][^A-Z]*$/.test(w) ? w[0].toLowerCase() + w.slice(1) : w;
+}
+
 /* This is an English-recall app: entries saved from other languages (e.g. a
    Chinese word looked up for its English translation, lanfrom=zh-CHS) are
    skipped at import to keep things simple. */
@@ -332,7 +340,7 @@ function parseYoudaoXML(text) {
   if (!doc.querySelector("parsererror")) {
     for (const item of doc.querySelectorAll("item")) {
       const g = (tag) => { const el = item.querySelector(tag); return el ? el.textContent.trim() : ""; };
-      const w = g("word");
+      const w = normalizeWordCase(g("word"));
       if (!w) continue;
       if (!isEnglishEntry(w, g("lanfrom"))) { skipped++; continue; }
       out.push({ word: w, trans: g("trans"), phonetic: g("phonetic"), tags: g("tags"), progress: g("progress") });
@@ -348,7 +356,7 @@ function parseYoudaoXML(text) {
         if (!m) return "";
         return m[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").trim();
       };
-      const w = grab("word");
+      const w = normalizeWordCase(grab("word"));
       if (!w) continue;
       if (!isEnglishEntry(w, grab("lanfrom"))) { skipped++; continue; }
       out.push({ word: w, trans: grab("trans"), phonetic: grab("phonetic"), tags: grab("tags"), progress: grab("progress") });
@@ -1603,6 +1611,18 @@ function toast(msg) {
 (function init() {
   words = loadJSON(LS.words, []);
   familiar = new Set(loadJSON(LS.familiar, []));
+  // migrate data imported before word-case normalization existed
+  let caseFixed = false;
+  for (const w of words) {
+    const n = normalizeWordCase(w.word);
+    if (n !== w.word) { w.word = n; caseFixed = true; }
+  }
+  if (caseFixed) saveJSON(LS.words, words);
+  const famFixed = new Set([...familiar].map(normalizeWordCase));
+  if (famFixed.size !== familiar.size || [...famFixed].some((w) => !familiar.has(w))) {
+    familiar = famFixed;
+    saveJSON(LS.familiar, [...familiar]);
+  }
   // one-time migration of the old localStorage example cache into IndexedDB
   const legacyEx = loadJSON(LS.exCache, null);
   if (legacyEx) {
