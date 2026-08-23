@@ -87,10 +87,11 @@
   #imgWrap { margin-top: .9rem; }
   #wordImg { max-width: 100%; max-height: 220px; border-radius: 10px; border: 1px solid var(--border); }
   #imgAttrRow { color: var(--muted); font-size: .68rem; margin-top: .25rem; }
-  #imgNext {
+  #imgNext, #imgHide {
     border: none; background: none; color: var(--accent); cursor: pointer;
     font-size: .68rem; padding: 0 .2rem;
   }
+  #imgHide { color: var(--muted); }
   #answerZone { margin-top: 1.1rem; }
   #answer {
     text-align: left; white-space: pre-wrap; font-size: 1.15rem; line-height: 1.55;
@@ -247,7 +248,7 @@
       <div id="phonetic"></div>
       <div id="imgWrap" class="hidden">
         <img id="wordImg" alt="">
-        <div id="imgAttrRow"><span id="imgAttr"></span> <button id="imgNext" title="Picture doesn't fit? Try the next source">↻ another</button></div>
+        <div id="imgAttrRow"><span id="imgAttr"></span> <button id="imgNext" title="Try the next source — or a fresh AI generation">↻ another</button><button id="imgHide" title="Hide the picture for this word">✕ hide</button></div>
       </div>
       <div id="answerZone">
         <button id="revealBtn">Show Answer</button>
@@ -1468,8 +1469,13 @@ const IMG_FETCHERS = {
   ai: async (word) => {
     const def = await definitionOf(word);
     const meaning = def ? def.slice(0, 160) : 'the English word "' + word + '"';
+    // rotate art styles so re-rolls look genuinely different, not the same
+    // composition with a new seed
+    const styles = ["simple clear cartoon illustration", "colorful flat vector illustration",
+      "children's picture-book watercolor illustration", "clean simple 3D render", "expressive pencil sketch"];
+    const style = styles[Math.floor(Math.random() * styles.length)];
     // "no words" matters: rendered text could leak the answer in ZH->EN mode
-    const prompt = "simple clear cartoon illustration for a vocabulary flashcard, clearly depicting: " +
+    const prompt = style + " for a vocabulary flashcard, clearly depicting: " +
       meaning + ". single scene, no words, no letters, no captions";
     const r = await fetch("https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) +
       "?width=640&height=480&nologo=true&seed=" + Math.floor(Math.random() * 1e9));
@@ -1480,29 +1486,24 @@ const IMG_FETCHERS = {
   },
 };
 
-/* "↻": walk the ring wiki -> openverse -> fresh AI -> hidden -> wiki …
-   starting after the current picture's source; remembered per word. A source
-   with nothing is skipped, and "hidden" leaves a restore control behind. */
+/* "↻ another": walk the source ring wiki -> openverse -> AI -> wiki …
+   starting after the current picture's source. AI generates fresh every time
+   (random seed + rotating art style), so landing on it again means a new
+   picture, and a source with nothing is skipped. Hiding is a separate button. */
 async function cycleImage() {
   const entry = current();
   if (!entry) return;
   const word = entry.word;
-  const RING = ["wiki", "openverse", "ai", "none"];
+  const RING = ["wiki", "openverse", "ai"];
   const cur = imgMem.get(word);
-  const curSrc = cur === "none" ? "none" : (cur ? cur.src : "none");
-  const start = RING.indexOf(curSrc); // -1 (unknown) begins the walk at wiki
+  const curSrc = cur && cur !== "none" ? cur.src : null;
+  const start = RING.indexOf(curSrc); // -1 (hidden/unknown) begins at wiki
   const btn = $("imgNext");
   btn.disabled = true;
   btn.textContent = "…";
   try {
     for (let step = 1; step <= RING.length; step++) {
       const next = RING[(start + step + RING.length) % RING.length];
-      if (next === "none") {
-        imgMem.set(word, "none");
-        idb.imgSet({ word, none: true, ts: Date.now() }).catch(() => {});
-        renderImage();
-        return;
-      }
       const got = await fetchImage(word, next);
       if (got) {
         imgMem.set(word, got);
@@ -1512,9 +1513,20 @@ async function cycleImage() {
       }
       // that source had nothing — keep walking the ring
     }
+    toast("No picture found from any source right now");
+    renderImage();
   } finally {
     btn.disabled = false;
+    btn.textContent = imgMem.get(word) === "none" ? "↻ show" : "↻ another";
   }
+}
+
+function hideImage() {
+  const entry = current();
+  if (!entry) return;
+  imgMem.set(entry.word, "none");
+  idb.imgSet({ word: entry.word, none: true, ts: Date.now() }).catch(() => {});
+  renderImage();
 }
 
 async function renderImage() {
@@ -1538,6 +1550,7 @@ async function renderImage() {
       $("wordImg").classList.add("hidden");
       $("imgAttr").textContent = "picture hidden";
       $("imgNext").textContent = "↻ show";
+      $("imgHide").classList.add("hidden");
       wrap.classList.remove("hidden");
     } else {
       wrap.classList.add("hidden"); // fetch failed — retried on next visit
@@ -1550,6 +1563,7 @@ async function renderImage() {
   $("wordImg").src = imgObjUrl;
   $("imgAttr").textContent = got.attr || "";
   $("imgNext").textContent = "↻ another";
+  $("imgHide").classList.remove("hidden");
   wrap.classList.remove("hidden");
 }
 
@@ -1763,6 +1777,7 @@ $("autoSpeakBtn").addEventListener("click", () => {
   if (autoSpeak && !$("studyWrap").classList.contains("hidden") && (mode === "en2zh" || revealed)) speak();
 });
 $("imgNext").addEventListener("click", cycleImage);
+$("imgHide").addEventListener("click", hideImage);
 $("imgBtn").addEventListener("click", () => {
   showImages = !showImages;
   $("imgBtn").classList.toggle("toggled", showImages);

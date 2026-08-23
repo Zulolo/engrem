@@ -174,8 +174,13 @@ async function definitionOf(word) {
 async function fetchAiImage(word) {
   const def = await definitionOf(word);
   const meaning = def ? def.slice(0, 160) : 'the English word "' + word + '"';
+  // rotate art styles so re-rolls look genuinely different, not the same
+  // composition with a new seed
+  const styles = ["simple clear cartoon illustration", "colorful flat vector illustration",
+    "children's picture-book watercolor illustration", "clean simple 3D render", "expressive pencil sketch"];
+  const style = styles[Math.floor(Math.random() * styles.length)];
   // "no words" matters: rendered text could leak the answer in ZH->EN mode
-  const prompt = "simple clear cartoon illustration for a vocabulary flashcard, clearly depicting: " +
+  const prompt = style + " for a vocabulary flashcard, clearly depicting: " +
     meaning + ". single scene, no words, no letters, no captions";
   const r = await fetch("https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) +
     "?width=640&height=480&nologo=true&seed=" + Math.floor(Math.random() * 1e9), { signal: AbortSignal.timeout(60000) });
