@@ -86,7 +86,11 @@
   #phonetic { color: var(--muted); margin-top: .35rem; font-size: 1rem; }
   #imgWrap { margin-top: .9rem; }
   #wordImg { max-width: 100%; max-height: 220px; border-radius: 10px; border: 1px solid var(--border); }
-  #imgAttr { color: var(--muted); font-size: .68rem; margin-top: .25rem; }
+  #imgAttrRow { color: var(--muted); font-size: .68rem; margin-top: .25rem; }
+  #imgNext {
+    border: none; background: none; color: var(--accent); cursor: pointer;
+    font-size: .68rem; padding: 0 .2rem;
+  }
   #answerZone { margin-top: 1.1rem; }
   #answer {
     text-align: left; white-space: pre-wrap; font-size: 1.15rem; line-height: 1.55;
@@ -243,7 +247,7 @@
       <div id="phonetic"></div>
       <div id="imgWrap" class="hidden">
         <img id="wordImg" alt="">
-        <div id="imgAttr"></div>
+        <div id="imgAttrRow"><span id="imgAttr"></span> <button id="imgNext" title="Picture doesn't fit? Try the next source">↻ another</button></div>
       </div>
       <div id="answerZone">
         <button id="revealBtn">Show Answer</button>
@@ -1332,6 +1336,7 @@ function toggleFamiliar() {
 }
 
 /* ---------------- memory-aid pictures (cached, chained sources) ---------------- */
+const IMG_AI_V = 2; // bump when the AI prompt improves: old entries regenerate
 const imgMem = new Map();      // word -> {blob, src, attr} | "none"
 const imgInflight = new Map(); // word -> Promise
 let imgToken = 0;
@@ -1341,7 +1346,10 @@ async function getCachedImage(word) {
   if (imgMem.has(word)) return imgMem.get(word);
   try {
     const rec = await idb.imgGet(word);
+    if (rec && rec.none) { imgMem.set(word, "none"); return "none"; }
     if (rec && rec.blob) {
+      // regenerate AI images made with the old, low-quality prompt
+      if (rec.src === "ai" && rec.v !== IMG_AI_V) return null;
       const v = { blob: rec.blob, src: rec.src, attr: rec.attr };
       imgMem.set(word, v);
       return v;
@@ -1353,6 +1361,7 @@ async function getCachedImage(word) {
 /* Cache-or-fetch with in-flight dedup. Returns {blob, src, attr} or null. */
 async function loadImage(word) {
   const cached = await getCachedImage(word);
+  if (cached === "none") return null; // user dismissed the picture for this word
   if (cached) return cached;
   if (imgInflight.has(word)) return imgInflight.get(word);
   const p = (async () => {
@@ -1360,7 +1369,7 @@ async function loadImage(word) {
       const got = await fetchImage(word);
       if (got) {
         imgMem.set(word, got);
-        idb.imgSet({ word, blob: got.blob, src: got.src, attr: got.attr, ts: Date.now() }).catch(() => {});
+        idb.imgSet({ word, blob: got.blob, src: got.src, attr: got.attr, v: got.v, ts: Date.now() }).catch(() => {});
       }
       return got;
     } catch { return null; }
@@ -1372,10 +1381,11 @@ async function loadImage(word) {
 
 /* Wikipedia thumbnail -> Openverse CC search -> Pollinations AI, first hit
    wins; in served mode the local server runs the same chain and disk-caches. */
-async function fetchImage(word) {
+async function fetchImage(word, forceSrc) {
   if (servedMode) {
     try {
-      const r = await fetch("api/image?word=" + encodeURIComponent(word));
+      const r = await fetch("api/image?word=" + encodeURIComponent(word) +
+        (forceSrc ? "&src=" + forceSrc : ""));
       if (r.ok) {
         const blob = await r.blob();
         if (blob.size > 0) return {
@@ -1388,50 +1398,124 @@ async function fetchImage(word) {
     } catch { return null; }
   }
   // file:// mode: run the chain directly (all three hosts allow CORS)
-  try { // 1) Wikipedia article thumbnail
-    const r = await fetch("https://en.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(word));
+  const chain = forceSrc ? [IMG_FETCHERS[forceSrc]].filter(Boolean)
+    : [IMG_FETCHERS.wiki, IMG_FETCHERS.openverse, IMG_FETCHERS.ai];
+  for (const fn of chain) {
+    try { const got = await fn(word); if (got) return got; } catch {}
+  }
+  return null;
+}
+
+/* A short English definition makes generated pictures depict the MEANING
+   instead of the model free-associating on the word. */
+async function definitionOf(word) {
+  try {
+    const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(word));
     if (r.ok) {
       const d = await r.json();
-      if (d.thumbnail && d.thumbnail.source && d.type !== "disambiguation") {
-        const ar = await fetch(d.thumbnail.source);
-        if (ar.ok) {
-          const blob = await ar.blob();
-          if (blob.size > 500) return { blob, src: "wiki", attr: "Wikipedia — " + (d.title || word) };
-        }
-      }
+      for (const e of Array.isArray(d) ? d : []) for (const m of e.meanings || []) for (const def of m.definitions || [])
+        if (def.definition) return def.definition;
     }
   } catch {}
-  try { // 2) Openverse CC image search
-    const r = await fetch("https://api.openverse.org/v1/images/?q=" + encodeURIComponent(word) +
-      "&page_size=1&license_type=commercial,modification");
+  try {
+    const r = await fetch("https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(word) + "?redirect=true");
     if (r.ok) {
       const d = await r.json();
-      const it = d && d.results && d.results[0];
-      if (it) {
-        const ar = await fetch(it.thumbnail || it.url);
-        if (ar.ok) {
-          const blob = await ar.blob();
-          if (blob.size > 500) {
-            const lic = it.license ? "CC " + String(it.license).toUpperCase() : "CC";
-            return { blob, src: "openverse", attr: (it.creator ? "by " + it.creator + " " : "") + "(" + lic + ") via Openverse" };
-          }
-        }
-      }
-    }
-  } catch {}
-  try { // 3) Pollinations AI illustration ("no text": don't leak the answer)
-    const prompt = 'minimalist illustration of the meaning of the English word "' + word +
-      '", educational flashcard style, no text, no letters';
-    const r = await fetch("https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) +
-      "?width=512&height=384&nologo=true");
-    if (r.ok) {
-      const blob = await r.blob();
-      if (blob.size > 2000 && blob.type.startsWith("image/")) {
-        return { blob, src: "ai", attr: "AI-generated illustration (Pollinations)" };
+      for (const sec of d.en || []) for (const def of sec.definitions || []) {
+        const t = String(def.definition || "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+        if (t) return t;
       }
     }
   } catch {}
   return null;
+}
+
+const IMG_FETCHERS = {
+  wiki: async (word) => {
+    const r = await fetch("https://en.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(word));
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (!d.thumbnail || !d.thumbnail.source || d.type === "disambiguation") return null;
+    // the article is often about something else entirely (a surname, a play)
+    if (/surname|given name|family name|film|play|album|band|TV series|magazine|song|footballer|politician/i.test(d.description || "")) return null;
+    const ar = await fetch(d.thumbnail.source);
+    if (!ar.ok) return null;
+    const blob = await ar.blob();
+    return blob.size > 500 ? { blob, src: "wiki", attr: "Wikipedia — " + (d.title || word) } : null;
+  },
+  openverse: async (word) => {
+    const r = await fetch("https://api.openverse.org/v1/images/?q=" + encodeURIComponent(word) +
+      "&page_size=8&license_type=commercial,modification");
+    if (!r.ok) return null;
+    const d = await r.json();
+    // tag search is loose: require the word in the result title or tags
+    const re = wordVariantsRegex(word);
+    const hits = ((d && d.results) || []).filter((x) => {
+      if (!re) return true;
+      re.lastIndex = 0;
+      if (re.test(x.title || "")) return true;
+      return (x.tags || []).some((t) => { re.lastIndex = 0; return re.test((t && t.name) || ""); });
+    });
+    const it = hits[0];
+    if (!it) return null;
+    const ar = await fetch(it.thumbnail || it.url);
+    if (!ar.ok) return null;
+    const blob = await ar.blob();
+    if (blob.size <= 500) return null;
+    const lic = it.license ? "CC " + String(it.license).toUpperCase() : "CC";
+    return { blob, src: "openverse", attr: (it.creator ? "by " + it.creator + " " : "") + "(" + lic + ") via Openverse" };
+  },
+  ai: async (word) => {
+    const def = await definitionOf(word);
+    const meaning = def ? def.slice(0, 160) : 'the English word "' + word + '"';
+    // "no words" matters: rendered text could leak the answer in ZH->EN mode
+    const prompt = "simple clear cartoon illustration for a vocabulary flashcard, clearly depicting: " +
+      meaning + ". single scene, no words, no letters, no captions";
+    const r = await fetch("https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) +
+      "?width=640&height=480&nologo=true&seed=" + Math.floor(Math.random() * 1e9));
+    if (!r.ok) return null;
+    const blob = await r.blob();
+    if (blob.size <= 2000 || !blob.type.startsWith("image/")) return null;
+    return { blob, src: "ai", attr: "AI-generated illustration (Pollinations)", v: IMG_AI_V };
+  },
+};
+
+/* "↻ another": replace a poor picture with the next source in the cycle
+   wiki -> openverse -> ai -> none (hidden) -> wiki … remembered per word. */
+async function cycleImage() {
+  const entry = current();
+  if (!entry) return;
+  const word = entry.word;
+  const ORDER = ["wiki", "openverse", "ai"];
+  const cur = imgMem.get(word);
+  const curSrc = cur && cur !== "none" ? cur.src : (cur === "none" ? "none" : null);
+  let idx = curSrc === "none" ? -1 : ORDER.indexOf(curSrc);
+  const btn = $("imgNext");
+  btn.disabled = true;
+  btn.textContent = "…";
+  try {
+    for (let step = 1; step <= ORDER.length + 1; step++) {
+      const next = idx + step <= ORDER.length - 1 ? ORDER[idx + step] : null;
+      if (!next) { // wrapped past the last source: hide the picture for this word
+        imgMem.set(word, "none");
+        idb.imgSet({ word, none: true, ts: Date.now() }).catch(() => {});
+        renderImage();
+        toast("Picture hidden for this word — ↻ appears again after Clear cache");
+        return;
+      }
+      const got = await fetchImage(word, next);
+      if (got) {
+        imgMem.set(word, got);
+        idb.imgSet({ word, blob: got.blob, src: got.src, attr: got.attr, v: got.v, ts: Date.now() }).catch(() => {});
+        renderImage();
+        return;
+      }
+      // that source had nothing — keep walking the cycle
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "↻ another";
+  }
 }
 
 async function renderImage() {
@@ -1666,6 +1750,7 @@ $("autoSpeakBtn").addEventListener("click", () => {
   toast(autoSpeak ? "Auto-pronounce on" : "Auto-pronounce off");
   if (autoSpeak && !$("studyWrap").classList.contains("hidden") && (mode === "en2zh" || revealed)) speak();
 });
+$("imgNext").addEventListener("click", cycleImage);
 $("imgBtn").addEventListener("click", () => {
   showImages = !showImages;
   $("imgBtn").classList.toggle("toggled", showImages);

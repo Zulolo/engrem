@@ -97,6 +97,9 @@ async function fetchWikiImage(word) {
   if (!r.ok) return null;
   const d = await r.json();
   if (!d.thumbnail || !d.thumbnail.source || d.type === "disambiguation") return null;
+  // the article for a word is often about something else entirely (a surname,
+  // a play, a band) — its photo would actively mislead, so skip those senses
+  if (/surname|given name|family name|film|play|album|band|TV series|magazine|song|footballer|politician/i.test(d.description || "")) return null;
   const ar = await fetch(d.thumbnail.source, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(10000) });
   if (!ar.ok) return null;
   const b = Buffer.from(await ar.arrayBuffer());
@@ -115,12 +118,21 @@ async function fetchOpenverseImage(word) {
   openverseNextAt = at + 600;
   if (at > now) await new Promise((r) => setTimeout(r, at - now));
   const r = await fetch("https://api.openverse.org/v1/images/?q=" + encodeURIComponent(word) +
-    "&page_size=1&license_type=commercial,modification",
+    "&page_size=8&license_type=commercial,modification",
     { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) });
   if (r.status === 429) { openverseCooldownUntil = Date.now() + 60000; return null; }
   if (!r.ok) return null;
   const d = await r.json();
-  const it = d && d.results && d.results[0];
+  // tag search is loose ("wilt" -> a "Wilts & Dorset" bus): require the word
+  // in the result title or tags, scanning several results
+  const re = wordVariantsRegex(word);
+  const hits = ((d && d.results) || []).filter((x) => {
+    if (!re) return true;
+    re.lastIndex = 0;
+    if (re.test(x.title || "")) return true;
+    return (x.tags || []).some((t) => { re.lastIndex = 0; return re.test((t && t.name) || ""); });
+  });
+  const it = hits[0];
   if (!it) return null;
   const ar = await fetch(it.thumbnail || it.url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(12000) });
   if (!ar.ok) return null;
@@ -131,18 +143,47 @@ async function fetchOpenverseImage(word) {
     attr: (it.creator ? "by " + it.creator + " " : "") + "(" + lic + ") via Openverse" };
 }
 
+const IMG_AI_V = 2; // bump when the AI prompt improves: old entries regenerate
+
+/* A short English definition makes generated pictures depict the MEANING
+   instead of the model free-associating on the word. */
+async function definitionOf(word) {
+  try {
+    const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(word),
+      { signal: AbortSignal.timeout(8000) });
+    if (r.ok) {
+      const d = await r.json();
+      for (const e of Array.isArray(d) ? d : []) for (const m of e.meanings || []) for (const def of m.definitions || [])
+        if (def.definition) return def.definition;
+    }
+  } catch {}
+  try {
+    const r = await fetch("https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(word) + "?redirect=true",
+      { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) });
+    if (r.ok) {
+      const d = await r.json();
+      for (const sec of d.en || []) for (const def of sec.definitions || []) {
+        const t = String(def.definition || "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+        if (t) return t;
+      }
+    }
+  } catch {}
+  return null;
+}
+
 async function fetchAiImage(word) {
-  // "no text" matters: an image containing the word itself would leak the
-  // answer in ZH->EN mode
-  const prompt = 'minimalist illustration of the meaning of the English word "' + word +
-    '", educational flashcard style, no text, no letters';
+  const def = await definitionOf(word);
+  const meaning = def ? def.slice(0, 160) : 'the English word "' + word + '"';
+  // "no words" matters: rendered text could leak the answer in ZH->EN mode
+  const prompt = "simple clear cartoon illustration for a vocabulary flashcard, clearly depicting: " +
+    meaning + ". single scene, no words, no letters, no captions";
   const r = await fetch("https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) +
-    "?width=512&height=384&nologo=true", { signal: AbortSignal.timeout(45000) });
+    "?width=640&height=480&nologo=true&seed=" + Math.floor(Math.random() * 1e9), { signal: AbortSignal.timeout(60000) });
   if (!r.ok) return null;
   const b = Buffer.from(await r.arrayBuffer());
   if (b.length < 2000 || !(r.headers.get("content-type") || "").startsWith("image/")) return null;
   return { buf: b, ext: extFromContentType(r.headers.get("content-type")), src: "ai",
-    attr: "AI-generated illustration (Pollinations)" };
+    attr: "AI-generated illustration (Pollinations)", v: IMG_AI_V };
 }
 
 function findAudioUrl(dictData) {
@@ -563,23 +604,33 @@ const server = http.createServer(async (req, res) => {
       });
       res.end(buf);
     };
+    // ?src=wiki|openverse|ai refetches from that one source (the "another
+    // picture" button), replacing whatever is cached
+    const FETCHERS = { wiki: fetchWikiImage, openverse: fetchOpenverseImage, ai: fetchAiImage };
+    const forced = url.searchParams.get("src");
     const cached = imgIndex[key];
-    if (cached && cached.file) {
+    // regenerate AI entries made with the old, low-quality prompt
+    const stale = cached && cached.src === "ai" && cached.v !== IMG_AI_V;
+    if (!forced && !stale && cached && cached.file) {
       try { sendEntry(cached, fs.readFileSync(path.join(IMG_DIR, cached.file))); return; }
       catch { delete imgIndex[key]; } // cached file vanished — refetch below
     }
-    // cache miss: Wikipedia -> Openverse -> Pollinations, first hit wins
     let got = null;
-    for (const fn of [fetchWikiImage, fetchOpenverseImage, fetchAiImage]) {
-      try { got = await fn(word); } catch { got = null; }
-      if (got) break;
+    if (forced && FETCHERS[forced]) {
+      try { got = await FETCHERS[forced](word); } catch { got = null; }
+    } else {
+      // Wikipedia -> Openverse -> Pollinations, first hit wins
+      for (const fn of [fetchWikiImage, fetchOpenverseImage, fetchAiImage]) {
+        try { got = await fn(word); } catch { got = null; }
+        if (got) break;
+      }
     }
     if (!got) { res.writeHead(503).end(); return; } // nothing cached — client retries later
     const fname = key.replace(/[^a-z0-9\-]/g, "_") + got.ext;
     try {
       fs.mkdirSync(IMG_DIR, { recursive: true });
       fs.writeFileSync(path.join(IMG_DIR, fname), got.buf);
-      imgIndex[key] = { file: fname, src: got.src, attr: got.attr };
+      imgIndex[key] = { file: fname, src: got.src, attr: got.attr, v: got.v };
       saveImgIndexSoon();
     } catch {}
     sendEntry({ file: fname, src: got.src, attr: got.attr }, got.buf);

@@ -100,6 +100,13 @@ also triggers the check.)
   depicts the hidden meaning, so it stays hidden until you reveal; in ZH→EN
   it shows immediately as a memory anchor. Cached like everything else
   (IndexedDB + `image-cache/` in server mode) — fetched once per word, ever.
+  Picture quality is imperfect by nature (tag searches mismatch senses, and the
+  free AI model is weak on abstract words), so every picture has an
+  **↻ another** button: it swaps in the next source — Wikipedia → Openverse →
+  AI (a fresh generation each time) → hidden — and remembers your choice.
+  AI prompts are built from the word's dictionary definition so generated
+  scenes depict the meaning, and Wikipedia articles about unrelated senses
+  (surnames, films, bands) are skipped.
 - **Shuffle**, **mark as known + skip known words**, and a **searchable word
   list** for jumping around.
 
