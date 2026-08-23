@@ -62,6 +62,89 @@ setInterval(() => {
   });
 }, 3000).unref();
 
+/* ---------- image cache (files on disk + index) ---------- */
+const IMG_DIR = path.join(ROOT, "image-cache");
+const IMG_INDEX = path.join(IMG_DIR, "index.json");
+const IMG_MIME = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml" };
+let imgIndex = {}; // word -> { file, src, attr }
+try { imgIndex = JSON.parse(fs.readFileSync(IMG_INDEX, "utf-8")); } catch {}
+let imgDirty = false;
+function saveImgIndexSoon() { imgDirty = true; }
+setInterval(() => {
+  if (!imgDirty) return;
+  imgDirty = false;
+  try { fs.mkdirSync(IMG_DIR, { recursive: true }); } catch {}
+  fs.writeFile(IMG_INDEX, JSON.stringify(imgIndex), (e) => {
+    if (e) console.error("Could not write image index:", e.message);
+  });
+}, 3000).unref();
+
+function extFromContentType(ct) {
+  ct = (ct || "").toLowerCase();
+  if (ct.includes("png")) return ".png";
+  if (ct.includes("gif")) return ".gif";
+  if (ct.includes("webp")) return ".webp";
+  if (ct.includes("svg")) return ".svg";
+  return ".jpg";
+}
+
+/* Memory-aid picture chain: Wikipedia article thumbnail (precise when it
+   exists) -> Openverse CC image search (broad coverage) -> Pollinations AI
+   illustration (fills abstract words). Each returns {buf, ext, src, attr}. */
+async function fetchWikiImage(word) {
+  const r = await fetch("https://en.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(word),
+    { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) });
+  if (!r.ok) return null;
+  const d = await r.json();
+  if (!d.thumbnail || !d.thumbnail.source || d.type === "disambiguation") return null;
+  const ar = await fetch(d.thumbnail.source, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(10000) });
+  if (!ar.ok) return null;
+  const b = Buffer.from(await ar.arrayBuffer());
+  if (b.length < 500) return null;
+  return { buf: b, ext: extFromContentType(ar.headers.get("content-type")), src: "wiki",
+    attr: "Wikipedia — " + (d.title || word) };
+}
+
+/* Openverse allows anonymous use but rate-limits bursts: space requests out
+   and back off on 429, same treatment as Tatoeba. */
+let openverseNextAt = 0, openverseCooldownUntil = 0;
+async function fetchOpenverseImage(word) {
+  if (Date.now() < openverseCooldownUntil) return null;
+  const now = Date.now();
+  const at = Math.max(now, openverseNextAt);
+  openverseNextAt = at + 600;
+  if (at > now) await new Promise((r) => setTimeout(r, at - now));
+  const r = await fetch("https://api.openverse.org/v1/images/?q=" + encodeURIComponent(word) +
+    "&page_size=1&license_type=commercial,modification",
+    { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) });
+  if (r.status === 429) { openverseCooldownUntil = Date.now() + 60000; return null; }
+  if (!r.ok) return null;
+  const d = await r.json();
+  const it = d && d.results && d.results[0];
+  if (!it) return null;
+  const ar = await fetch(it.thumbnail || it.url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(12000) });
+  if (!ar.ok) return null;
+  const b = Buffer.from(await ar.arrayBuffer());
+  if (b.length < 500) return null;
+  const lic = it.license ? "CC " + String(it.license).toUpperCase() : "CC";
+  return { buf: b, ext: extFromContentType(ar.headers.get("content-type")), src: "openverse",
+    attr: (it.creator ? "by " + it.creator + " " : "") + "(" + lic + ") via Openverse" };
+}
+
+async function fetchAiImage(word) {
+  // "no text" matters: an image containing the word itself would leak the
+  // answer in ZH->EN mode
+  const prompt = 'minimalist illustration of the meaning of the English word "' + word +
+    '", educational flashcard style, no text, no letters';
+  const r = await fetch("https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) +
+    "?width=512&height=384&nologo=true", { signal: AbortSignal.timeout(45000) });
+  if (!r.ok) return null;
+  const b = Buffer.from(await r.arrayBuffer());
+  if (b.length < 2000 || !(r.headers.get("content-type") || "").startsWith("image/")) return null;
+  return { buf: b, ext: extFromContentType(r.headers.get("content-type")), src: "ai",
+    attr: "AI-generated illustration (Pollinations)" };
+}
+
 function findAudioUrl(dictData) {
   let first = "";
   for (const entry of Array.isArray(dictData) ? dictData : []) {
@@ -106,6 +189,11 @@ function flushCache() {
     audioDirty = false;
     try { fs.mkdirSync(AUDIO_DIR, { recursive: true }); } catch {}
     try { fs.writeFileSync(AUDIO_INDEX, JSON.stringify(audioIndex)); } catch {}
+  }
+  if (imgDirty) {
+    imgDirty = false;
+    try { fs.mkdirSync(IMG_DIR, { recursive: true }); } catch {}
+    try { fs.writeFileSync(IMG_INDEX, JSON.stringify(imgIndex)); } catch {}
   }
 }
 process.on("SIGINT", () => { flushCache(); process.exit(0); });
@@ -454,9 +542,47 @@ const server = http.createServer(async (req, res) => {
     audioIndex = {}; audioDirty = false;
     try { fs.rmSync(CACHE_FILE, { force: true }); } catch {}
     try { fs.rmSync(AUDIO_DIR, { recursive: true, force: true }); } catch {}
+    imgIndex = {}; imgDirty = false;
+    try { fs.rmSync(IMG_DIR, { recursive: true, force: true }); } catch {}
     console.log("Caches cleared by client request");
     res.writeHead(200, { "Content-Type": MIME[".json"] });
     res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (pathname === "/api/image") {
+    const word = (url.searchParams.get("word") || "").trim();
+    if (!word || word.length > 100) { res.writeHead(400).end(); return; }
+    const key = word.toLowerCase();
+    const sendEntry = (entry, buf) => {
+      res.writeHead(200, {
+        "Content-Type": IMG_MIME[path.extname(entry.file).toLowerCase()] || "image/jpeg",
+        "Cache-Control": "max-age=31536000",
+        "x-image-source": entry.src || "",
+        "x-image-attr": encodeURIComponent(entry.attr || ""),
+      });
+      res.end(buf);
+    };
+    const cached = imgIndex[key];
+    if (cached && cached.file) {
+      try { sendEntry(cached, fs.readFileSync(path.join(IMG_DIR, cached.file))); return; }
+      catch { delete imgIndex[key]; } // cached file vanished — refetch below
+    }
+    // cache miss: Wikipedia -> Openverse -> Pollinations, first hit wins
+    let got = null;
+    for (const fn of [fetchWikiImage, fetchOpenverseImage, fetchAiImage]) {
+      try { got = await fn(word); } catch { got = null; }
+      if (got) break;
+    }
+    if (!got) { res.writeHead(503).end(); return; } // nothing cached — client retries later
+    const fname = key.replace(/[^a-z0-9\-]/g, "_") + got.ext;
+    try {
+      fs.mkdirSync(IMG_DIR, { recursive: true });
+      fs.writeFileSync(path.join(IMG_DIR, fname), got.buf);
+      imgIndex[key] = { file: fname, src: got.src, attr: got.attr };
+      saveImgIndexSoon();
+    } catch {}
+    sendEntry({ file: fname, src: got.src, attr: got.attr }, got.buf);
     return;
   }
 

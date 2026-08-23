@@ -92,6 +92,14 @@ also triggers the check.)
   By design, the word already on screen when the app opens is **not** spoken:
   a voice right at page load would startle you. Pronunciation starts from your
   first interaction (next word, reveal, etc.) onward.
+- **Memory-aid pictures** (`🖼 Pics` in the header, shortcut `I`, on by
+  default): each word gets a cached picture — a Wikipedia article thumbnail
+  when one exists (precise for concrete nouns), else a Creative-Commons photo
+  found via Openverse (with attribution), else an AI-generated illustration
+  (Pollinations) so abstract words get one too. In EN→ZH mode the picture
+  depicts the hidden meaning, so it stays hidden until you reveal; in ZH→EN
+  it shows immediately as a memory anchor. Cached like everything else
+  (IndexedDB + `image-cache/` in server mode) — fetched once per word, ever.
 - **Shuffle**, **mark as known + skip known words**, and a **searchable word
   list** for jumping around.
 
@@ -130,6 +138,11 @@ cached locally on your machine:
   [Free Dictionary API](https://dictionaryapi.dev), and the
   [Wiktionary REST API](https://en.wiktionary.org/api/rest_v1/) — the latter
   two serve [Wiktionary](https://www.wiktionary.org) content (CC BY-SA).
+- **Pictures**: [Wikipedia](https://en.wikipedia.org) article thumbnails,
+  [Openverse](https://openverse.org) (Creative-Commons image search — each
+  image credited with creator and license), and
+  [Pollinations](https://pollinations.ai) for AI-generated illustrations (a
+  free community service — it may change or stop working at any time).
 - **Pronunciation audio**, tried in this order:
   1. [Wikimedia Commons](https://commons.wikimedia.org) — the CC-licensed human
      recordings behind Wiktionary, via the official API (partial coverage);
@@ -145,7 +158,7 @@ Important notes for contributors and forks:
 - **Never commit personal wordbook exports.** The `<trans>` definitions inside
   them are Youdao's copyrighted dictionary content. The `.gitignore` excludes
   all `.xml` files except the hand-written `sample_wordbook.xml`, plus the
-  local caches (`examples-cache.json`, `audio-cache/`) that accumulate
+  local caches (`examples-cache.json`, `audio-cache/`, `image-cache/`) that accumulate
   third-party content.
 - This project is an independent study tool. It is **not affiliated with,
   endorsed by, or connected to NetEase Youdao (网易有道翻译)** in any way; the

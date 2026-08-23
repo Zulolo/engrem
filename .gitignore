@@ -6,3 +6,4 @@
 # Local caches of third-party content (Tatoeba / Wiktionary sentences, audio)
 examples-cache.json
 audio-cache/
+image-cache/

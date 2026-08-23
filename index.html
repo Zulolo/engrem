@@ -84,6 +84,9 @@
   #wordLine { font-size: 2.2rem; font-weight: 650; line-height: 1.25; word-break: break-word; }
   #wordLine.zh { font-size: 1.35rem; font-weight: 500; text-align: left; white-space: pre-wrap; }
   #phonetic { color: var(--muted); margin-top: .35rem; font-size: 1rem; }
+  #imgWrap { margin-top: .9rem; }
+  #wordImg { max-width: 100%; max-height: 220px; border-radius: 10px; border: 1px solid var(--border); }
+  #imgAttr { color: var(--muted); font-size: .68rem; margin-top: .25rem; }
   #answerZone { margin-top: 1.1rem; }
   #answer {
     text-align: left; white-space: pre-wrap; font-size: 1.15rem; line-height: 1.55;
@@ -199,6 +202,7 @@
   <button class="btn" id="hideFamBtn" title="Skip words marked as known">🙈 Skip known</button>
   <div class="spacer"></div>
   <button class="btn" id="autoSpeakBtn" title="Auto-pronounce: speaks each word when you switch to it (EN→ZH) or when you reveal the answer (ZH→EN). Shortcut: A">🔈 Auto</button>
+  <button class="btn" id="imgBtn" title="Show a memory-aid picture for each word (hidden until reveal in EN→ZH). Shortcut: I">🖼 Pics</button>
   <button class="btn" id="cacheAllBtn" title="Download examples and pronunciation for every word into the local cache (click again to pause)">⬇ Cache</button>
   <button class="btn" id="clearCacheBtn" title="Delete all cached examples and pronunciation audio (words and study progress are kept)">🧹 Clear cache</button>
   <button class="btn" id="listBtn" title="Shortcut: L">📋 List</button>
@@ -237,6 +241,10 @@
       <div id="counter"></div>
       <div id="wordLine"></div>
       <div id="phonetic"></div>
+      <div id="imgWrap" class="hidden">
+        <img id="wordImg" alt="">
+        <div id="imgAttr"></div>
+      </div>
       <div id="answerZone">
         <button id="revealBtn">Show Answer</button>
         <div id="answer" class="hidden"></div>
@@ -291,6 +299,7 @@ let shuffled = false;
 let hideFamiliar = false;
 let revealed = false;
 let autoSpeak = false;
+let showImages = true;
 let familiar = new Set();
 
 function loadJSON(key, fallback) {
@@ -510,12 +519,13 @@ const idb = {
   _db: null,
   _open: () => new Promise((res, rej) => {
     if (idb._db) return res(idb._db);
-    const r = indexedDB.open("engrem", 3);
+    const r = indexedDB.open("engrem", 4);
     r.onupgradeneeded = () => {
       const db = r.result;
       if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
       if (!db.objectStoreNames.contains("ex")) db.createObjectStore("ex", { keyPath: "word" });
       if (!db.objectStoreNames.contains("audio")) db.createObjectStore("audio", { keyPath: "word" });
+      if (!db.objectStoreNames.contains("img")) db.createObjectStore("img", { keyPath: "word" });
     };
     r.onsuccess = () => { idb._db = r.result; res(r.result); };
     r.onerror = () => rej(r.error);
@@ -564,6 +574,22 @@ const idb = {
     const db = await idb._open();
     return new Promise((res, rej) => {
       const t = db.transaction("audio", "readwrite").objectStore("audio").put(rec);
+      t.onsuccess = () => res();
+      t.onerror = () => rej(t.error);
+    });
+  },
+  imgGet: async (word) => {
+    const db = await idb._open();
+    return new Promise((res, rej) => {
+      const t = db.transaction("img").objectStore("img").get(word);
+      t.onsuccess = () => res(t.result || null);
+      t.onerror = () => rej(t.error);
+    });
+  },
+  imgSet: async (rec) => {
+    const db = await idb._open();
+    return new Promise((res, rej) => {
+      const t = db.transaction("img", "readwrite").objectStore("img").put(rec);
       t.onsuccess = () => res();
       t.onerror = () => rej(t.error);
     });
@@ -757,7 +783,7 @@ function rebuildOrder(resetPos) {
 function current() { return order.length ? words[order[pos]] : null; }
 
 function saveState() {
-  saveJSON(LS.state, { pos, mode, shuffled, hideFamiliar, autoSpeak, order });
+  saveJSON(LS.state, { pos, mode, shuffled, hideFamiliar, autoSpeak, showImages, order });
 }
 
 /* ---------------- rendering ---------------- */
@@ -775,6 +801,7 @@ function render() {
     wordLine.textContent = ""; phon.textContent = ""; answer.classList.add("hidden");
     $("revealBtn").classList.add("hidden");
     $("exList").innerHTML = ""; $("exStatus").textContent = ""; $("exLinks").innerHTML = "";
+    $("imgWrap").classList.add("hidden");
     return;
   }
   // say plainly when words are held back, so a total that is smaller than the
@@ -802,6 +829,7 @@ function render() {
   $("famBtn").classList.toggle("familiar", familiar.has(entry.word));
   $("famBtn").textContent = familiar.has(entry.word) ? "✓ Known ✔" : "✓ Known";
   renderExamples();
+  renderImage();
   updateListHighlight();
 }
 
@@ -812,6 +840,7 @@ function setRevealed(v) {
   $("answer").classList.toggle("hidden", !revealed);
   $("revealBtn").classList.toggle("hidden", revealed);
   renderExamples();
+  renderImage();
   // in ZH→EN the word is the hidden answer, so only speak once it is revealed
   if (v && autoSpeak && mode === "zh2en") speak();
 }
@@ -871,6 +900,7 @@ function prefetchAround() {
     for (const w of targets) {
       if (!exMem.has(w)) await loadExamples(w); // sequential — gentle on the APIs
       if (!audioMem.has(w)) await ensureAudioCached(w);
+      if (showImages && !imgMem.has(w)) await loadImage(w);
     }
   })();
 }
@@ -1301,6 +1331,132 @@ function toggleFamiliar() {
   render();
 }
 
+/* ---------------- memory-aid pictures (cached, chained sources) ---------------- */
+const imgMem = new Map();      // word -> {blob, src, attr} | "none"
+const imgInflight = new Map(); // word -> Promise
+let imgToken = 0;
+let imgObjUrl = null;
+
+async function getCachedImage(word) {
+  if (imgMem.has(word)) return imgMem.get(word);
+  try {
+    const rec = await idb.imgGet(word);
+    if (rec && rec.blob) {
+      const v = { blob: rec.blob, src: rec.src, attr: rec.attr };
+      imgMem.set(word, v);
+      return v;
+    }
+  } catch {}
+  return null;
+}
+
+/* Cache-or-fetch with in-flight dedup. Returns {blob, src, attr} or null. */
+async function loadImage(word) {
+  const cached = await getCachedImage(word);
+  if (cached) return cached;
+  if (imgInflight.has(word)) return imgInflight.get(word);
+  const p = (async () => {
+    try {
+      const got = await fetchImage(word);
+      if (got) {
+        imgMem.set(word, got);
+        idb.imgSet({ word, blob: got.blob, src: got.src, attr: got.attr, ts: Date.now() }).catch(() => {});
+      }
+      return got;
+    } catch { return null; }
+    finally { imgInflight.delete(word); }
+  })();
+  imgInflight.set(word, p);
+  return p;
+}
+
+/* Wikipedia thumbnail -> Openverse CC search -> Pollinations AI, first hit
+   wins; in served mode the local server runs the same chain and disk-caches. */
+async function fetchImage(word) {
+  if (servedMode) {
+    try {
+      const r = await fetch("api/image?word=" + encodeURIComponent(word));
+      if (r.ok) {
+        const blob = await r.blob();
+        if (blob.size > 0) return {
+          blob,
+          src: r.headers.get("x-image-source") || "",
+          attr: decodeURIComponent(r.headers.get("x-image-attr") || ""),
+        };
+      }
+      return null; // server tried the whole chain
+    } catch { return null; }
+  }
+  // file:// mode: run the chain directly (all three hosts allow CORS)
+  try { // 1) Wikipedia article thumbnail
+    const r = await fetch("https://en.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(word));
+    if (r.ok) {
+      const d = await r.json();
+      if (d.thumbnail && d.thumbnail.source && d.type !== "disambiguation") {
+        const ar = await fetch(d.thumbnail.source);
+        if (ar.ok) {
+          const blob = await ar.blob();
+          if (blob.size > 500) return { blob, src: "wiki", attr: "Wikipedia — " + (d.title || word) };
+        }
+      }
+    }
+  } catch {}
+  try { // 2) Openverse CC image search
+    const r = await fetch("https://api.openverse.org/v1/images/?q=" + encodeURIComponent(word) +
+      "&page_size=1&license_type=commercial,modification");
+    if (r.ok) {
+      const d = await r.json();
+      const it = d && d.results && d.results[0];
+      if (it) {
+        const ar = await fetch(it.thumbnail || it.url);
+        if (ar.ok) {
+          const blob = await ar.blob();
+          if (blob.size > 500) {
+            const lic = it.license ? "CC " + String(it.license).toUpperCase() : "CC";
+            return { blob, src: "openverse", attr: (it.creator ? "by " + it.creator + " " : "") + "(" + lic + ") via Openverse" };
+          }
+        }
+      }
+    }
+  } catch {}
+  try { // 3) Pollinations AI illustration ("no text": don't leak the answer)
+    const prompt = 'minimalist illustration of the meaning of the English word "' + word +
+      '", educational flashcard style, no text, no letters';
+    const r = await fetch("https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) +
+      "?width=512&height=384&nologo=true");
+    if (r.ok) {
+      const blob = await r.blob();
+      if (blob.size > 2000 && blob.type.startsWith("image/")) {
+        return { blob, src: "ai", attr: "AI-generated illustration (Pollinations)" };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+async function renderImage() {
+  const wrap = $("imgWrap");
+  const entry = current();
+  const token = ++imgToken;
+  if (!entry || !showImages) { wrap.classList.add("hidden"); return; }
+  const word = entry.word;
+  // in EN->ZH the picture depicts the hidden meaning — keep it under wraps
+  // until reveal, but warm the cache so the reveal is instant
+  if (mode === "en2zh" && !revealed) {
+    wrap.classList.add("hidden");
+    loadImage(word);
+    return;
+  }
+  const got = await loadImage(word);
+  if (token !== imgToken) return; // user moved on
+  if (!got) { wrap.classList.add("hidden"); return; }
+  if (imgObjUrl) URL.revokeObjectURL(imgObjUrl);
+  imgObjUrl = URL.createObjectURL(got.blob);
+  $("wordImg").src = imgObjUrl;
+  $("imgAttr").textContent = got.attr || "";
+  wrap.classList.remove("hidden");
+}
+
 /* ---------------- pronunciation (cached audio, TTS fallback) ---------------- */
 const audioMem = new Map();      // word -> Blob | "none"
 const audioInflight = new Map(); // word -> Promise
@@ -1505,9 +1661,16 @@ $("shuffleBtn").addEventListener("click", () => {
 $("autoSpeakBtn").addEventListener("click", () => {
   autoSpeak = !autoSpeak;
   $("autoSpeakBtn").classList.toggle("toggled", autoSpeak);
+  $("imgBtn").classList.toggle("toggled", showImages);
   saveState();
   toast(autoSpeak ? "Auto-pronounce on" : "Auto-pronounce off");
   if (autoSpeak && !$("studyWrap").classList.contains("hidden") && (mode === "en2zh" || revealed)) speak();
+});
+$("imgBtn").addEventListener("click", () => {
+  showImages = !showImages;
+  $("imgBtn").classList.toggle("toggled", showImages);
+  saveState();
+  renderImage();
 });
 $("hideFamBtn").addEventListener("click", () => {
   hideFamiliar = !hideFamiliar;
@@ -1549,6 +1712,9 @@ $("cacheAllBtn").addEventListener("click", async () => {
         draw();
       }
       if ((await ensureAudioCached(word)) === null) failed++;
+      if (showImages && (await getCachedImage(word)) === null) {
+        if ((await loadImage(word)) === null) failed++;
+      }
     }
   };
   await Promise.all(Array.from({ length: 4 }, worker));
@@ -1567,8 +1733,10 @@ $("clearCacheBtn").addEventListener("click", async () => {
   if (bulkRunning) { toast("Pause the bulk download first"); return; }
   if (!confirm("Clear all cached examples and pronunciation audio?\nWords, study position and known-marks are kept.")) return;
   exMem.clear(); exInflight.clear(); audioMem.clear(); audioInflight.clear();
+  imgMem.clear(); imgInflight.clear();
   try { await idb.clearStore("ex"); } catch {}
   try { await idb.clearStore("audio"); } catch {}
+  try { await idb.clearStore("img"); } catch {}
   if (servedMode) {
     try { await fetch("api/clear-cache", { method: "POST" }); } catch {}
   }
@@ -1604,6 +1772,7 @@ document.addEventListener("keydown", (e) => {
     case "f": case "F": toggleFamiliar(); break;
     case "p": case "P": speak(); break;
     case "a": case "A": $("autoSpeakBtn").click(); break;
+    case "i": case "I": $("imgBtn").click(); break;
     case "l": case "L": $("listBtn").click(); break;
   }
 });
@@ -1649,6 +1818,7 @@ function toast(msg) {
     shuffled = !!st.shuffled;
     hideFamiliar = !!st.hideFamiliar;
     autoSpeak = !!st.autoSpeak;
+    showImages = st.showImages !== false;
   }
   $("modeEn").classList.toggle("active", mode === "en2zh");
   $("modeZh").classList.toggle("active", mode === "zh2en");
