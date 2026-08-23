@@ -1399,6 +1399,9 @@ async function fetchImage(word, forceSrc) {
           blob,
           src: r.headers.get("x-image-source") || "",
           attr: decodeURIComponent(r.headers.get("x-image-attr") || ""),
+          // without the version tag, a served AI picture would be treated as
+          // stale on the next load and refetched — losing a chosen picture
+          v: parseInt(r.headers.get("x-image-v"), 10) || IMG_AI_V,
         };
       }
       return null; // server tried the whole chain

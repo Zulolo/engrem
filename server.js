@@ -606,6 +606,7 @@ const server = http.createServer(async (req, res) => {
         "Cache-Control": "max-age=31536000",
         "x-image-source": entry.src || "",
         "x-image-attr": encodeURIComponent(entry.attr || ""),
+        "x-image-v": String(entry.v || ""),
       });
       res.end(buf);
     };
