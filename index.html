@@ -1347,7 +1347,13 @@ async function getCachedImage(word) {
   if (imgMem.has(word)) return imgMem.get(word);
   try {
     const rec = await idb.imgGet(word);
-    if (rec && rec.none) { imgMem.set(word, "none"); return "none"; }
+    if (rec && rec.none) {
+      // hides without the marker were left behind by the old cycle bug, not
+      // chosen by the user — ignore them so the word heals itself
+      if (rec.hv !== 2) return null;
+      imgMem.set(word, "none");
+      return "none";
+    }
     if (rec && rec.blob) {
       // regenerate AI images made with the old, low-quality prompt
       if (rec.src === "ai" && rec.v !== IMG_AI_V) return null;
@@ -1525,7 +1531,7 @@ function hideImage() {
   const entry = current();
   if (!entry) return;
   imgMem.set(entry.word, "none");
-  idb.imgSet({ word: entry.word, none: true, ts: Date.now() }).catch(() => {});
+  idb.imgSet({ word: entry.word, none: true, hv: 2, ts: Date.now() }).catch(() => {});
   renderImage();
 }
 
