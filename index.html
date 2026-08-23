@@ -405,6 +405,9 @@ function importText(text, name, meta, keepWord) {
       status.textContent = "No words found in " + name + " — is it a Youdao wordbook export?";
       return false;
     }
+    // a re-export still lacks these phonetics — carry over ones we fetched
+    const oldPhon = new Map(words.map((w) => [w.word, w.phonetic]));
+    for (const p of parsed) if (!p.phonetic && oldPhon.get(p.word)) p.phonetic = oldPhon.get(p.word);
     words = parsed;
     saveJSON(LS.words, words);
     // remember the source file so a changed re-export is picked up automatically
@@ -820,6 +823,7 @@ function render() {
     wordLine.className = "";
     wordLine.textContent = entry.word;
     phon.textContent = entry.phonetic || "";
+    if (!entry.phonetic) fillPhonetic(entry);
     answer.innerHTML = esc(entry.trans || "(no translation)");
   } else {
     wordLine.className = "zh";
@@ -1334,6 +1338,35 @@ function toggleFamiliar() {
   saveJSON(LS.familiar, [...familiar]);
   if (hideFamiliar) { rebuildOrder(false); }
   render();
+}
+
+/* ---------------- phonetics (fill gaps in the Youdao export) ---------------- */
+const phoneticTried = new Set(); // per-session: do not hammer the API on misses
+async function fillPhonetic(entry) {
+  const word = entry.word;
+  if (entry.phonetic || /s/.test(word) || phoneticTried.has(word)) return;
+  phoneticTried.add(word);
+  const terms = [...new Set([word.toLowerCase(), ...lemmaCandidates(word)])].slice(0, 2);
+  for (const t of terms) {
+    try {
+      const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(t));
+      if (!r.ok) continue;
+      const d = await r.json();
+      let p = "";
+      for (const e of Array.isArray(d) ? d : []) {
+        if (e.phonetic) { p = e.phonetic; break; }
+        for (const ph of e.phonetics || []) if (ph.text) { p = ph.text; break; }
+        if (p) break;
+      }
+      if (p) {
+        entry.phonetic = "[" + p.replace(new RegExp("^/+|/+$", "g"), "") + "]"; // /…/ -> […] like Youdao
+        saveJSON(LS.words, words); // persists across sessions
+        const cur = current();
+        if (cur && cur.word === word && mode === "en2zh") $("phonetic").textContent = entry.phonetic;
+        return;
+      }
+    } catch {}
+  }
 }
 
 /* ---------------- memory-aid pictures (cached, chained sources) ---------------- */
