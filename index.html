@@ -1480,27 +1480,27 @@ const IMG_FETCHERS = {
   },
 };
 
-/* "↻ another": replace a poor picture with the next source in the cycle
-   wiki -> openverse -> ai -> none (hidden) -> wiki … remembered per word. */
+/* "↻": walk the ring wiki -> openverse -> fresh AI -> hidden -> wiki …
+   starting after the current picture's source; remembered per word. A source
+   with nothing is skipped, and "hidden" leaves a restore control behind. */
 async function cycleImage() {
   const entry = current();
   if (!entry) return;
   const word = entry.word;
-  const ORDER = ["wiki", "openverse", "ai"];
+  const RING = ["wiki", "openverse", "ai", "none"];
   const cur = imgMem.get(word);
-  const curSrc = cur && cur !== "none" ? cur.src : (cur === "none" ? "none" : null);
-  let idx = curSrc === "none" ? -1 : ORDER.indexOf(curSrc);
+  const curSrc = cur === "none" ? "none" : (cur ? cur.src : "none");
+  const start = RING.indexOf(curSrc); // -1 (unknown) begins the walk at wiki
   const btn = $("imgNext");
   btn.disabled = true;
   btn.textContent = "…";
   try {
-    for (let step = 1; step <= ORDER.length + 1; step++) {
-      const next = idx + step <= ORDER.length - 1 ? ORDER[idx + step] : null;
-      if (!next) { // wrapped past the last source: hide the picture for this word
+    for (let step = 1; step <= RING.length; step++) {
+      const next = RING[(start + step + RING.length) % RING.length];
+      if (next === "none") {
         imgMem.set(word, "none");
         idb.imgSet({ word, none: true, ts: Date.now() }).catch(() => {});
         renderImage();
-        toast("Picture hidden for this word — ↻ appears again after Clear cache");
         return;
       }
       const got = await fetchImage(word, next);
@@ -1510,11 +1510,10 @@ async function cycleImage() {
         renderImage();
         return;
       }
-      // that source had nothing — keep walking the cycle
+      // that source had nothing — keep walking the ring
     }
   } finally {
     btn.disabled = false;
-    btn.textContent = "↻ another";
   }
 }
 
@@ -1533,11 +1532,24 @@ async function renderImage() {
   }
   const got = await loadImage(word);
   if (token !== imgToken) return; // user moved on
-  if (!got) { wrap.classList.add("hidden"); return; }
+  if (!got) {
+    if (imgMem.get(word) === "none") {
+      // dismissed by the user: keep a way back instead of vanishing entirely
+      $("wordImg").classList.add("hidden");
+      $("imgAttr").textContent = "picture hidden";
+      $("imgNext").textContent = "↻ show";
+      wrap.classList.remove("hidden");
+    } else {
+      wrap.classList.add("hidden"); // fetch failed — retried on next visit
+    }
+    return;
+  }
   if (imgObjUrl) URL.revokeObjectURL(imgObjUrl);
   imgObjUrl = URL.createObjectURL(got.blob);
+  $("wordImg").classList.remove("hidden");
   $("wordImg").src = imgObjUrl;
   $("imgAttr").textContent = got.attr || "";
+  $("imgNext").textContent = "↻ another";
   wrap.classList.remove("hidden");
 }
 
