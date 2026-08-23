@@ -111,7 +111,7 @@ async function fetchWikiImage(word) {
 /* Openverse allows anonymous use but rate-limits bursts: space requests out
    and back off on 429, same treatment as Tatoeba. */
 let openverseNextAt = 0, openverseCooldownUntil = 0;
-async function fetchOpenverseImage(word) {
+async function fetchOpenverseImage(word, loose) {
   if (Date.now() < openverseCooldownUntil) return null;
   const now = Date.now();
   const at = Math.max(now, openverseNextAt);
@@ -132,7 +132,9 @@ async function fetchOpenverseImage(word) {
     if (re.test(x.title || "")) return true;
     return (x.tags || []).some((t) => { re.lastIndex = 0; return re.test((t && t.name) || ""); });
   });
-  const it = hits[0];
+  // a user clicking "another" is browsing candidates and can judge fit
+  // themselves — fall back to the top unfiltered result in that case
+  const it = hits[0] || (loose ? (d && d.results && d.results[0]) : null);
   if (!it) return null;
   const ar = await fetch(it.thumbnail || it.url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(12000) });
   if (!ar.ok) return null;
@@ -626,7 +628,8 @@ const server = http.createServer(async (req, res) => {
     }
     let got = null;
     if (forced && FETCHERS[forced]) {
-      try { got = await FETCHERS[forced](word); } catch { got = null; }
+      try { got = forced === "openverse" ? await fetchOpenverseImage(word, true) : await FETCHERS[forced](word); }
+      catch { got = null; }
     } else {
       // Wikipedia -> Openverse -> Pollinations, first hit wins
       for (const fn of [fetchWikiImage, fetchOpenverseImage, fetchAiImage]) {

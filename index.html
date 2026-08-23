@@ -1410,9 +1410,12 @@ async function fetchImage(word, forceSrc) {
     } catch { return null; }
   }
   // file:// mode: run the chain directly (all three hosts allow CORS)
-  const chain = forceSrc ? [IMG_FETCHERS[forceSrc]].filter(Boolean)
-    : [IMG_FETCHERS.wiki, IMG_FETCHERS.openverse, IMG_FETCHERS.ai];
-  for (const fn of chain) {
+  if (forceSrc) {
+    const fn = IMG_FETCHERS[forceSrc];
+    if (!fn) return null;
+    try { return await fn(word, forceSrc === "openverse"); } catch { return null; }
+  }
+  for (const fn of [IMG_FETCHERS.wiki, IMG_FETCHERS.openverse, IMG_FETCHERS.ai]) {
     try { const got = await fn(word); if (got) return got; } catch {}
   }
   return null;
@@ -1455,7 +1458,7 @@ const IMG_FETCHERS = {
     const blob = await ar.blob();
     return blob.size > 500 ? { blob, src: "wiki", attr: "Wikipedia — " + (d.title || word) } : null;
   },
-  openverse: async (word) => {
+  openverse: async (word, loose) => {
     const r = await fetch("https://api.openverse.org/v1/images/?q=" + encodeURIComponent(word) +
       "&page_size=8&license_type=commercial,modification");
     if (!r.ok) return null;
@@ -1468,7 +1471,8 @@ const IMG_FETCHERS = {
       if (re.test(x.title || "")) return true;
       return (x.tags || []).some((t) => { re.lastIndex = 0; return re.test((t && t.name) || ""); });
     });
-    const it = hits[0];
+    // "another" clicks browse candidates — fall back to the top result
+    const it = hits[0] || (loose ? (d && d.results && d.results[0]) : null);
     if (!it) return null;
     const ar = await fetch(it.thumbnail || it.url);
     if (!ar.ok) return null;
