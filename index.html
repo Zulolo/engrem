@@ -298,9 +298,15 @@ function loadJSON(key, fallback) {
   catch { return fallback; }
 }
 function saveJSON(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); }
-  catch (e) { /* quota — drop example cache and retry once */
-    if (key !== LS.exCache) { try { localStorage.removeItem(LS.exCache); localStorage.setItem(key, JSON.stringify(val)); } catch {} }
+  try { localStorage.setItem(key, JSON.stringify(val)); return true; }
+  catch (e) { /* quota — drop the legacy example cache and retry once */
+    if (key !== LS.exCache) {
+      try { localStorage.removeItem(LS.exCache); localStorage.setItem(key, JSON.stringify(val)); return true; } catch {}
+    }
+    // never fail silently: a dropped save means the next launch quietly
+    // reverts to older data
+    try { toast("Could not save to browser storage — changes may not persist"); } catch {}
+    return false;
   }
 }
 
@@ -771,7 +777,11 @@ function render() {
     $("exList").innerHTML = ""; $("exStatus").textContent = ""; $("exLinks").innerHTML = "";
     return;
   }
+  // say plainly when words are held back, so a total that is smaller than the
+  // imported wordbook is never a mystery
+  const hidden = words.length - order.length;
   $("counter").textContent = (pos + 1) + " / " + order.length +
+    (hidden > 0 ? "　·　" + hidden + (hideFamiliar ? " known hidden" : " hidden") : "") +
     (familiar.has(entry.word) ? "　·　known" : "");
 
   if (mode === "en2zh") {
@@ -1650,8 +1660,11 @@ function toast(msg) {
     if (st && Array.isArray(st.order) && st.order.length && st.order.every((i) => i >= 0 && i < words.length)) {
       order = st.order;
       pos = Math.min(st.pos || 0, order.length - 1);
-      // re-apply filters in case the known list changed elsewhere
-      if (!shuffled) rebuildOrder(false);
+      // Rebuild whenever the saved order no longer covers the wordbook. With
+      // shuffle on it used to be reused verbatim, so words added by a later
+      // export sat at indices past its end and never entered the rotation.
+      const expected = words.reduce((n, w) => n + (hideFamiliar && familiar.has(w.word) ? 0 : 1), 0);
+      if (!shuffled || order.length !== expected) rebuildOrder(false);
     } else {
       rebuildOrder(true);
     }
