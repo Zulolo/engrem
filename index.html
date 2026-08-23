@@ -1391,8 +1391,10 @@ async function loadImage(word) {
 async function fetchImage(word, forceSrc) {
   if (servedMode) {
     try {
+      // cache: no-store + nonce — the browser HTTP cache must never answer
+      // for the app cache, or "another" returns the same picture
       const r = await fetch("api/image?word=" + encodeURIComponent(word) +
-        (forceSrc ? "&src=" + forceSrc : ""));
+        (forceSrc ? "&src=" + forceSrc + "&r=" + Date.now() : ""), { cache: "no-store" });
       if (r.ok) {
         const blob = await r.blob();
         if (blob.size > 0) return {

@@ -603,7 +603,10 @@ const server = http.createServer(async (req, res) => {
     const sendEntry = (entry, buf) => {
       res.writeHead(200, {
         "Content-Type": IMG_MIME[path.extname(entry.file).toLowerCase()] || "image/jpeg",
-        "Cache-Control": "max-age=31536000",
+        // no-store: the app caches images itself (IndexedDB + disk); letting
+        // the browser HTTP-cache this URL made "another" replay the same
+        // bytes without the request ever reaching the server
+        "Cache-Control": "no-store",
         "x-image-source": entry.src || "",
         "x-image-attr": encodeURIComponent(entry.attr || ""),
         "x-image-v": String(entry.v || ""),
