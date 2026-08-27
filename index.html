@@ -103,6 +103,11 @@
     padding: .65rem 2.2rem; font-size: 1rem; cursor: pointer;
   }
   #revealBtn:hover { filter: brightness(1.08); }
+  #hintBtn {
+    background: transparent; color: var(--accent); border: 1px solid var(--accent);
+    border-radius: 10px; padding: .6rem 1.4rem; font-size: 1rem; cursor: pointer; margin-right: .6rem;
+  }
+  #hintBtn:hover { background: var(--accent-soft); }
   .hint { color: var(--muted); font-size: .75rem; margin-top: .5rem; }
   kbd {
     background: var(--bg); border: 1px solid var(--border); border-bottom-width: 2px;
@@ -251,10 +256,11 @@
         <div id="imgAttrRow"><span id="imgAttr"></span> <button id="imgNext" title="Try the next source — or a fresh AI generation">↻ another</button><button id="imgHide" title="Hide the picture for this word">✕ hide</button></div>
       </div>
       <div id="answerZone">
+        <button id="hintBtn" title="Show only the picture (Space)">💡 Hint</button>
         <button id="revealBtn">Show Answer</button>
         <div id="answer" class="hidden"></div>
         <div class="hint">
-          <kbd>Space</kbd> show/hide &nbsp; <kbd>←</kbd><kbd>→</kbd> prev/next &nbsp;
+          <kbd>Space</kbd> hint → answer → hide &nbsp; <kbd>←</kbd><kbd>→</kbd> prev/next &nbsp;
           <kbd>M</kbd> switch mode &nbsp; <kbd>F</kbd> mark known &nbsp; <kbd>P</kbd> pronounce &nbsp; <kbd>A</kbd> auto-pronounce
         </div>
       </div>
@@ -303,6 +309,7 @@ let mode = "en2zh";       // or "zh2en"
 let shuffled = false;
 let hideFamiliar = false;
 let revealed = false;
+let hintShown = false; // EN->ZH only: picture revealed, translation still hidden
 let autoSpeak = false;
 let showImages = true;
 let familiar = new Set();
@@ -424,7 +431,7 @@ function importText(text, name, meta, keepWord) {
       if (i >= 0) pos = i;
       saveState();
     }
-    revealed = false;
+    revealed = false; hintShown = false;
     showStudy();
     return true;
   } catch (e) {
@@ -834,6 +841,7 @@ function render() {
   }
   answer.classList.toggle("hidden", !revealed);
   $("revealBtn").classList.toggle("hidden", revealed);
+  $("hintBtn").classList.toggle("hidden", revealed || hintShown || mode !== "en2zh" || !showImages);
   $("revealBtn").textContent = "Show Answer";
   $("famBtn").classList.toggle("familiar", familiar.has(entry.word));
   $("famBtn").textContent = familiar.has(entry.word) ? "✓ Known ✔" : "✓ Known";
@@ -844,14 +852,24 @@ function render() {
 
 function setRevealed(v) {
   revealed = v;
+  if (v) hintShown = true; else hintShown = false; // answer implies picture; hiding hides both
   const entry = current();
   if (!entry) return;
   $("answer").classList.toggle("hidden", !revealed);
   $("revealBtn").classList.toggle("hidden", revealed);
+  $("hintBtn").classList.toggle("hidden", revealed || hintShown || mode !== "en2zh" || !showImages);
   renderExamples();
   renderImage();
   // in ZH→EN the word is the hidden answer, so only speak once it is revealed
   if (v && autoSpeak && mode === "zh2en") speak();
+}
+
+/* EN->ZH picture-only reveal: the first stage of Space (hint -> answer -> hide). */
+function setHint() {
+  if (mode !== "en2zh" || revealed) return;
+  hintShown = true;
+  $("hintBtn").classList.add("hidden");
+  renderImage();
 }
 
 /* ---------------- example sentences ---------------- */
@@ -1315,7 +1333,7 @@ async function renderExamples() {
 function go(delta) {
   if (!order.length) return;
   pos = (pos + delta + order.length) % order.length;
-  revealed = false;
+  revealed = false; hintShown = false;
   saveState();
   render();
   if (autoSpeak && mode === "en2zh") speak();
@@ -1323,7 +1341,7 @@ function go(delta) {
 
 function toggleMode() {
   mode = mode === "en2zh" ? "zh2en" : "en2zh";
-  revealed = false;
+  revealed = false; hintShown = false;
   $("modeEn").classList.toggle("active", mode === "en2zh");
   $("modeZh").classList.toggle("active", mode === "zh2en");
   saveState();
@@ -1585,7 +1603,7 @@ async function renderImage() {
   const word = entry.word;
   // in EN->ZH the picture depicts the hidden meaning — keep it under wraps
   // until reveal, but warm the cache so the reveal is instant
-  if (mode === "en2zh" && !revealed) {
+  if (mode === "en2zh" && !revealed && !hintShown) {
     wrap.classList.add("hidden");
     loadImage(word);
     return;
@@ -1802,6 +1820,7 @@ document.addEventListener("drop", (e) => {
 });
 
 $("revealBtn").addEventListener("click", () => setRevealed(true));
+$("hintBtn").addEventListener("click", setHint);
 $("prevBtn").addEventListener("click", () => go(-1));
 $("nextBtn").addEventListener("click", () => go(1));
 $("famBtn").addEventListener("click", toggleFamiliar);
@@ -1812,7 +1831,7 @@ $("shuffleBtn").addEventListener("click", () => {
   shuffled = !shuffled;
   $("shuffleBtn").classList.toggle("toggled", shuffled);
   rebuildOrder(true);
-  revealed = false;
+  revealed = false; hintShown = false;
   render();
   toast(shuffled ? "Shuffle on" : "Original order restored");
 });
@@ -1836,7 +1855,7 @@ $("hideFamBtn").addEventListener("click", () => {
   hideFamiliar = !hideFamiliar;
   $("hideFamBtn").classList.toggle("toggled", hideFamiliar);
   rebuildOrder(false);
-  revealed = false;
+  revealed = false; hintShown = false;
   render();
 });
 /* Bulk-download examples + audio for the whole wordbook into the local cache.
@@ -1914,7 +1933,7 @@ $("listItems").addEventListener("click", (e) => {
   const li = e.target.closest("li");
   if (!li) return;
   pos = +li.dataset.oi;
-  revealed = false;
+  revealed = false; hintShown = false;
   saveState();
   render();
 });
@@ -1924,7 +1943,11 @@ document.addEventListener("keydown", (e) => {
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA")) return;
   switch (e.key) {
-    case " ": e.preventDefault(); setRevealed(!revealed); break;
+    case " ":
+      e.preventDefault();
+      if (mode === "en2zh" && !revealed && !hintShown && showImages) setHint();
+      else setRevealed(!revealed);
+      break;
     case "ArrowRight": e.preventDefault(); go(1); break;
     case "ArrowLeft": e.preventDefault(); go(-1); break;
     case "m": case "M": toggleMode(); break;

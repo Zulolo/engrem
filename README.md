@@ -38,8 +38,11 @@ also triggers the check.)
 
 ## Features
 
-- **EN → ZH mode**: shows the English word and phonetic; the Chinese translation is
-  hidden until you click **Show Answer** or press `Space`.
+- **EN → ZH mode**: shows the English word and phonetic. Recall happens in two
+  stages: **💡 Hint** reveals only the picture, **Show Answer** reveals the
+  Chinese translation as well. `Space` walks the cycle — first press hint,
+  second press answer, third press hides both again (with pictures off, Space
+  simply toggles the answer).
 - **ZH → EN mode**: shows the Chinese translation with the English word hidden; in
   example sentences only the word's core is blanked while affixes stay visible
   as a grammatical hint — *thawed* shows as `____ed`, *inadvertently* as
@@ -175,7 +178,7 @@ Important notes for contributors and forks:
 
 | Key | Action |
 |---|---|
-| `Space` | Show / hide the answer |
+| `Space` | EN→ZH: hint (picture) → answer → hide; ZH→EN: show / hide the answer |
 | `←` / `→` | Previous / next word |
 | `M` | Switch EN→ZH / ZH→EN mode |
 | `S` | Toggle shuffle |
