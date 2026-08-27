@@ -87,7 +87,7 @@
   #imgWrap { margin-top: .9rem; }
   #wordImg { max-width: 100%; max-height: 220px; border-radius: 10px; border: 1px solid var(--border); }
   #imgAttrRow { color: var(--muted); font-size: .68rem; margin-top: .25rem; }
-  #imgNext, #imgHide {
+  #imgNext, #imgHide, #imgAsk {
     border: none; background: none; color: var(--accent); cursor: pointer;
     font-size: .68rem; padding: 0 .2rem;
   }
@@ -186,6 +186,19 @@
   footer {
     text-align: center; color: var(--muted); font-size: .72rem; padding: .45rem; border-top: 1px solid var(--border);
   }
+  #aiDlg { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  #aiPanel { width: min(520px, 92vw); padding: 1.2rem 1.4rem; }
+  #aiPanel h3 { margin: 0 0 .6rem; font-size: 1.05rem; }
+  #aiPanel p.small { color: var(--muted); font-size: .8rem; line-height: 1.45; margin: 0 0 .8rem; }
+  #aiPanel p.small a { color: var(--accent); }
+  #aiPanel label { display: block; font-size: .85rem; margin: .5rem 0; }
+  #aiPanel input[type=password], #aiPanel select {
+    width: 100%; padding: .4rem .5rem; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg); color: var(--text); font-size: .9rem; margin-top: .2rem;
+  }
+  #aiPanel label.chk { display: flex; align-items: center; gap: .4rem; }
+  #aiPanel .row { margin-top: .8rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+  #aiMsg { font-size: .8rem; color: var(--muted); min-height: 1.2em; margin-top: .4rem; }
   .hidden { display: none !important; }
   #toast {
     position: fixed; bottom: 4rem; left: 50%; transform: translateX(-50%);
@@ -212,6 +225,7 @@
   <button class="btn" id="hideFamBtn" title="Skip words marked as known">🙈 Skip known</button>
   <div class="spacer"></div>
   <button class="btn" id="autoSpeakBtn" title="Auto-pronounce: speaks each word when you switch to it (EN→ZH) or when you reveal the answer (ZH→EN). Shortcut: A">🔈 Auto</button>
+  <button class="btn" id="aiBtn" title="Better pictures with your own OpenAI API key">🤖 ChatGPT</button>
   <button class="btn" id="imgBtn" title="Show a memory-aid picture for each word (hidden until reveal in EN→ZH). Shortcut: I">🖼 Pics</button>
   <button class="btn" id="cacheAllBtn" title="Download examples and pronunciation for every word into the local cache (click again to pause)">⬇ Cache</button>
   <button class="btn" id="clearCacheBtn" title="Delete all cached examples and pronunciation audio (words and study progress are kept)">🧹 Clear cache</button>
@@ -253,7 +267,7 @@
       <div id="phonetic"></div>
       <div id="imgWrap" class="hidden">
         <img id="wordImg" alt="">
-        <div id="imgAttrRow"><span id="imgAttr"></span> <button id="imgNext" title="Try the next source — or a fresh AI generation">↻ another</button><button id="imgHide" title="Hide the picture for this word">✕ hide</button></div>
+        <div id="imgAttrRow"><span id="imgAttr"></span> <button id="imgNext" title="Try the next source — or a fresh AI generation">↻ another</button><button id="imgHide" title="Hide the picture for this word">✕ hide</button><button id="imgAsk" title="Open ChatGPT with the drawing prompt — then paste (Ctrl+V) or drop the picture here">💬 ChatGPT</button></div>
       </div>
       <div id="answerZone">
         <button id="hintBtn" title="Show only the picture (Space)">💡 Hint</button>
@@ -287,6 +301,33 @@
   </aside>
 </main>
 
+<div id="aiDlg" class="hidden">
+  <div id="aiPanel" class="card">
+    <h3>🤖 ChatGPT pictures</h3>
+    <p class="small"><b>With your ChatGPT subscription (manual):</b> click <b>💬 ChatGPT</b> under any
+      picture — ChatGPT opens in a new tab with the drawing prompt filled in. Copy the picture it draws,
+      come back and press <b>Ctrl+V</b> (or drop the saved file on the card); it is stored as that word's
+      picture. No settings needed.</p>
+    <p class="small"><b>Automatically, with an API key:</b> OpenAI's chat subscription cannot be linked to
+      other apps, but an <b>API key</b> from
+      <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com</a>
+      (separate pay-as-you-go billing, roughly $0.01–0.04 per picture) lets the app draw pictures with the
+      same image model by itself. Pictures are generated only when a word is shown or you click ↻ — never
+      by ⬇ Cache. The key stays in this browser and is sent only to the local server and OpenAI.</p>
+    <label>API key<br><input type="password" id="aiKey" placeholder="sk-…" autocomplete="off"></label>
+    <label>Model<br><select id="aiModel">
+      <option value="gpt-image-1">gpt-image-1 (low-cost tier)</option>
+      <option value="dall-e-3">DALL·E 3</option>
+    </select></label>
+    <label class="chk"><input type="checkbox" id="aiEnabled"> Use ChatGPT for AI pictures</label>
+    <div id="aiMsg"></div>
+    <div class="row">
+      <button class="btn" id="aiSave">Save</button>
+      <button class="btn" id="aiTest">Save &amp; test on current word</button>
+      <button class="btn" id="aiClose">Close</button>
+    </div>
+  </div>
+</div>
 <footer>Data stays in your browser (localStorage). Examples: Free Dictionary API / Tatoeba.</footer>
 <div id="toast"></div>
 
@@ -300,6 +341,7 @@ const LS = {
   familiar: "engrem.familiar",
   exCache: "engrem.examples",
   lastImport: "engrem.lastImport",
+  openai: "engrem.openai",
 };
 
 let words = [];           // [{word, trans, phonetic, tags, progress}]
@@ -312,6 +354,7 @@ let revealed = false;
 let hintShown = false; // EN->ZH only: picture revealed, translation still hidden
 let autoSpeak = false;
 let showImages = true;
+let openai = { key: "", model: "gpt-image-1", enabled: false }; // optional ChatGPT pictures
 let familiar = new Set();
 
 function loadJSON(key, fallback) {
@@ -1417,14 +1460,14 @@ async function getCachedImage(word) {
 }
 
 /* Cache-or-fetch with in-flight dedup. Returns {blob, src, attr} or null. */
-async function loadImage(word) {
+async function loadImage(word, opts = {}) {
   const cached = await getCachedImage(word);
   if (cached === "none") return null; // user dismissed the picture for this word
   if (cached) return cached;
   if (imgInflight.has(word)) return imgInflight.get(word);
   const p = (async () => {
     try {
-      const got = await fetchImage(word);
+      const got = await fetchImage(word, undefined, opts);
       if (got) {
         imgMem.set(word, got);
         idb.imgSet({ word, blob: got.blob, src: got.src, attr: got.attr, v: got.v, ts: Date.now() }).catch(() => {});
@@ -1439,13 +1482,22 @@ async function loadImage(word) {
 
 /* Wikipedia thumbnail -> Openverse CC search -> Pollinations AI, first hit
    wins; in served mode the local server runs the same chain and disk-caches. */
-async function fetchImage(word, forceSrc) {
+async function fetchImage(word, forceSrc, opts = {}) {
+  const paid = !opts.free && openaiReady(); // bulk caching never spends the user's money
   if (servedMode) {
     try {
       // cache: no-store + nonce — the browser HTTP cache must never answer
       // for the app cache, or "another" returns the same picture
+      const headers = paid ? { "x-openai-key": openai.key, "x-openai-model": openai.model } : {};
       const r = await fetch("api/image?word=" + encodeURIComponent(word) +
-        (forceSrc ? "&src=" + forceSrc + "&r=" + Date.now() : ""), { cache: "no-store" });
+        (forceSrc ? "&src=" + forceSrc + "&r=" + Date.now() : ""), { cache: "no-store", headers });
+      if (r.status === 502) { // the paid generation failed — say why
+        const d = await r.json().catch(() => ({}));
+        toast("ChatGPT: " + (d.error || "request failed"));
+        return null;
+      }
+      const warn = r.headers.get("x-image-warning");
+      if (warn) toast("ChatGPT failed (" + decodeURIComponent(warn) + ") — used the free model instead");
       if (r.ok) {
         const blob = await r.blob();
         if (blob.size > 0) return {
@@ -1460,13 +1512,21 @@ async function fetchImage(word, forceSrc) {
       return null; // server tried the whole chain
     } catch { return null; }
   }
-  // file:// mode: run the chain directly (all three hosts allow CORS)
+  // file:// mode: run the chain directly (all hosts allow CORS)
+  const viaOpenAi = async (w) => {
+    try { return await IMG_FETCHERS.openai(w); }
+    catch (e) { toast("ChatGPT: " + e.message); return null; }
+  };
   if (forceSrc) {
+    if (forceSrc === "ai" && paid) return viaOpenAi(word); // ChatGPT replaces the free model
     const fn = IMG_FETCHERS[forceSrc];
     if (!fn) return null;
     try { return await fn(word, forceSrc === "openverse"); } catch { return null; }
   }
-  for (const fn of [IMG_FETCHERS.wiki, IMG_FETCHERS.openverse, IMG_FETCHERS.ai]) {
+  const chain = [IMG_FETCHERS.wiki, IMG_FETCHERS.openverse];
+  if (paid) chain.push(viaOpenAi);
+  chain.push(IMG_FETCHERS.ai);
+  for (const fn of chain) {
     try { const got = await fn(word); if (got) return got; } catch {}
   }
   return null;
@@ -1532,6 +1592,35 @@ const IMG_FETCHERS = {
     const lic = it.license ? "CC " + String(it.license).toUpperCase() : "CC";
     return { blob, src: "openverse", attr: (it.creator ? "by " + it.creator + " " : "") + "(" + lic + ") via Openverse" };
   },
+  openai: async (word) => {
+    const def = await definitionOf(word);
+    const prompt = 'Please draw a picture of the word "' + word + '"' +
+      (def ? " (meaning: " + def.slice(0, 140) + ")" : "") +
+      '. Do not show the word "' + word + '" itself, or any other text, in the picture.';
+    const tryModel = async (m) => {
+      const body = m === "dall-e-3"
+        ? { model: m, prompt, n: 1, size: "1024x1024", quality: "standard", response_format: "b64_json" }
+        : { model: m, prompt, n: 1, size: "1024x1024", quality: "low" };
+      const r = await fetch("https://api.openai.com/v1/images/generations", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + openai.key, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((d.error && d.error.message) || ("HTTP " + r.status));
+      const b64 = d.data && d.data[0] && d.data[0].b64_json;
+      if (!b64) throw new Error("no image data returned");
+      const bin = atob(b64), arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return { blob: new Blob([arr], { type: "image/png" }), src: "openai", attr: "ChatGPT image (" + m + ")", v: IMG_AI_V };
+    };
+    const first = openai.model || "gpt-image-1";
+    try { return await tryModel(first); }
+    catch (e) {
+      if (first !== "dall-e-3" && /verif|not found|does not exist|permission/i.test(e.message)) return tryModel("dall-e-3");
+      throw e;
+    }
+  },
   ai: async (word) => {
     const def = await definitionOf(word);
     const meaning = def ? def.slice(0, 160) : 'the English word "' + word + '"';
@@ -1587,6 +1676,46 @@ async function cycleImage() {
   }
 }
 
+/* The user's own ChatGPT: open it with the prompt; the drawn picture comes
+   back by paste or drop and is cached like any fetched one (src "user"). */
+function chatPrompt(word) {
+  return 'Please draw a picture of the word "' + word + '". In the picture do not show the word "' + word + '" itself.';
+}
+function askChatGPT() {
+  const entry = current();
+  if (!entry) return;
+  const prompt = chatPrompt(entry.word);
+  if (navigator.clipboard) navigator.clipboard.writeText(prompt).catch(() => {}); // backup if the URL prefill fails
+  window.open("https://chatgpt.com/?q=" + encodeURIComponent(prompt), "_blank", "noopener");
+  toast("ChatGPT opened with the prompt (also copied). Copy its picture, come back and press Ctrl+V");
+}
+async function setUserImage(blob) {
+  const entry = current();
+  if (!entry || !blob || !blob.type.startsWith("image/")) return;
+  const word = entry.word;
+  const got = { blob, src: "user", attr: "your picture", v: IMG_AI_V };
+  imgMem.set(word, got);
+  idb.imgSet({ word, blob, src: got.src, attr: got.attr, v: got.v, ts: Date.now() }).catch(() => {});
+  if (servedMode) {
+    fetch("api/image?word=" + encodeURIComponent(word), {
+      method: "POST", body: blob,
+      headers: { "Content-Type": blob.type, "x-image-attr": encodeURIComponent(got.attr) },
+    }).catch(() => {});
+  }
+  if (mode === "en2zh" && !revealed && !hintShown) setHint(); // you chose it — see it
+  else renderImage();
+  toast("Picture saved for “" + word + "”");
+}
+document.addEventListener("paste", (e) => {
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+  if (!current() || !$("importScreen").classList.contains("hidden")) return;
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  for (const it of items) {
+    if (it.type.startsWith("image/")) { e.preventDefault(); setUserImage(it.getAsFile()); return; }
+  }
+});
+
 function hideImage() {
   const entry = current();
   if (!entry) return;
@@ -1619,7 +1748,12 @@ async function renderImage() {
       $("imgHide").classList.add("hidden");
       wrap.classList.remove("hidden");
     } else {
-      wrap.classList.add("hidden"); // fetch failed — retried on next visit
+      // fetch failed — retried on next visit; still offer ↻ and ChatGPT
+      $("wordImg").classList.add("hidden");
+      $("imgAttr").textContent = "no picture yet";
+      $("imgNext").textContent = "↻ try again";
+      $("imgHide").classList.add("hidden");
+      wrap.classList.remove("hidden");
     }
     return;
   }
@@ -1813,6 +1947,10 @@ document.addEventListener("drop", (e) => {
   e.preventDefault();
   dz.classList.remove("drag");
   const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f && f.type.startsWith("image/") && current() && $("importScreen").classList.contains("hidden")) {
+    setUserImage(f);
+    return;
+  }
   if (f) {
     if ($("importScreen").classList.contains("hidden")) showImport();
     importFile(f);
@@ -1839,15 +1977,60 @@ $("autoSpeakBtn").addEventListener("click", () => {
   autoSpeak = !autoSpeak;
   $("autoSpeakBtn").classList.toggle("toggled", autoSpeak);
   $("imgBtn").classList.toggle("toggled", showImages);
+  openai = Object.assign({}, openai, loadJSON(LS.openai, {}));
+  $("aiBtn").classList.toggle("toggled", openaiReady());
   saveState();
   toast(autoSpeak ? "Auto-pronounce on" : "Auto-pronounce off");
   if (autoSpeak && !$("studyWrap").classList.contains("hidden") && (mode === "en2zh" || revealed)) speak();
 });
+/* ---------------- ChatGPT pictures: optional, the user's own OpenAI key ---------------- */
+function openaiReady() { return !!(openai.enabled && openai.key); }
+function saveAiSettings() {
+  openai = { key: $("aiKey").value.trim(), model: $("aiModel").value, enabled: $("aiEnabled").checked };
+  saveJSON(LS.openai, openai);
+  $("aiBtn").classList.toggle("toggled", openaiReady());
+}
+$("aiBtn").addEventListener("click", () => {
+  $("aiKey").value = openai.key || "";
+  $("aiModel").value = openai.model || "gpt-image-1";
+  $("aiEnabled").checked = !!openai.enabled;
+  $("aiMsg").textContent = "";
+  $("aiDlg").classList.remove("hidden");
+});
+$("aiClose").addEventListener("click", () => $("aiDlg").classList.add("hidden"));
+$("aiDlg").addEventListener("click", (e) => { if (e.target === $("aiDlg")) $("aiDlg").classList.add("hidden"); });
+$("aiSave").addEventListener("click", () => {
+  saveAiSettings();
+  $("aiMsg").textContent = openai.key ? (openai.enabled ? "Saved — new AI pictures come from ChatGPT." : "Saved (not enabled yet).") : "Saved — no key, ChatGPT pictures off.";
+});
+$("aiTest").addEventListener("click", async () => {
+  saveAiSettings();
+  const entry = current();
+  if (!openai.key) { $("aiMsg").textContent = "Enter an API key first."; return; }
+  if (!entry) { $("aiMsg").textContent = "Import a wordbook and open a word first."; return; }
+  $("aiMsg").textContent = "Generating a picture for “" + entry.word + "”… (10–30 s)";
+  const wasEnabled = openai.enabled;
+  openai.enabled = true; // test regardless of the checkbox
+  const got = await fetchImage(entry.word, "ai");
+  openai.enabled = wasEnabled;
+  if (got && got.src === "openai") {
+    imgMem.set(entry.word, got);
+    idb.imgSet({ word: entry.word, blob: got.blob, src: got.src, attr: got.attr, v: got.v, ts: Date.now() }).catch(() => {});
+    renderImage();
+    $("aiMsg").textContent = "Works — the ChatGPT picture is on the card now (reveal it if hidden).";
+  } else {
+    $("aiMsg").textContent = "Generation failed — see the message that popped up.";
+  }
+});
+
 $("imgNext").addEventListener("click", cycleImage);
 $("imgHide").addEventListener("click", hideImage);
+$("imgAsk").addEventListener("click", askChatGPT);
 $("imgBtn").addEventListener("click", () => {
   showImages = !showImages;
   $("imgBtn").classList.toggle("toggled", showImages);
+  openai = Object.assign({}, openai, loadJSON(LS.openai, {}));
+  $("aiBtn").classList.toggle("toggled", openaiReady());
   saveState();
   renderImage();
 });
@@ -1892,7 +2075,7 @@ $("cacheAllBtn").addEventListener("click", async () => {
       }
       if ((await ensureAudioCached(word)) === null) failed++;
       if (showImages && (await getCachedImage(word)) === null) {
-        if ((await loadImage(word)) === null) failed++;
+        if ((await loadImage(word, { free: true })) === null) failed++; // free sources only
       }
     }
   };
@@ -1942,6 +2125,7 @@ document.addEventListener("keydown", (e) => {
   if ($("studyWrap").classList.contains("hidden")) return;
   const t = e.target;
   if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA")) return;
+  if (!$("aiDlg").classList.contains("hidden")) { if (e.key === "Escape") $("aiDlg").classList.add("hidden"); return; }
   switch (e.key) {
     case " ":
       e.preventDefault();

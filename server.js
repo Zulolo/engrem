@@ -173,6 +173,40 @@ async function definitionOf(word) {
   return null;
 }
 
+/* Optional: OpenAI image models with the user's own API key, sent by the
+   browser per request (x-openai-key / x-openai-model) and never stored here.
+   Replaces the free model when configured; the caller decides fallbacks. */
+async function fetchOpenAiImage(word, key, model) {
+  const def = await definitionOf(word);
+  // the prompt the user asked for, plus the meaning so ambiguous words draw the right sense
+  const prompt = 'Please draw a picture of the word "' + word + '"' +
+    (def ? " (meaning: " + def.slice(0, 140) + ")" : "") +
+    '. Do not show the word "' + word + '" itself, or any other text, in the picture.';
+  const tryModel = async (m) => {
+    const body = m === "dall-e-3"
+      ? { model: m, prompt, n: 1, size: "1024x1024", quality: "standard", response_format: "b64_json" }
+      : { model: m, prompt, n: 1, size: "1024x1024", quality: "low" };
+    const r = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120000),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((d.error && d.error.message) || ("HTTP " + r.status));
+    const b64 = d.data && d.data[0] && d.data[0].b64_json;
+    if (!b64) throw new Error("no image data returned");
+    return { buf: Buffer.from(b64, "base64"), ext: ".png", src: "openai", attr: "ChatGPT image (" + m + ")", v: IMG_AI_V };
+  };
+  const first = model || "gpt-image-1";
+  try { return await tryModel(first); }
+  catch (e) {
+    // gpt-image-1 needs an org-verified account on some plans; DALL·E 3 does not
+    if (first !== "dall-e-3" && /verif|not found|does not exist|permission/i.test(e.message)) return tryModel("dall-e-3");
+    throw e;
+  }
+}
+
 async function fetchAiImage(word) {
   const def = await definitionOf(word);
   const meaning = def ? def.slice(0, 160) : 'the English word "' + word + '"';
@@ -602,7 +636,30 @@ const server = http.createServer(async (req, res) => {
     const word = (url.searchParams.get("word") || "").trim();
     if (!word || word.length > 100) { res.writeHead(400).end(); return; }
     const key = word.toLowerCase();
-    const sendEntry = (entry, buf) => {
+    if (req.method === "POST") {
+      const ct = (req.headers["content-type"] || "").split(";")[0].trim();
+      const ext = Object.keys(IMG_MIME).find((e) => IMG_MIME[e] === ct) || "";
+      if (!ext) { res.writeHead(415).end(); return; }
+      const chunks = []; let size = 0;
+      for await (const c of req) {
+        size += c.length;
+        if (size > 10e6) { res.writeHead(413).end(); return; }
+        chunks.push(c);
+      }
+      const buf = Buffer.concat(chunks);
+      if (!buf.length) { res.writeHead(400).end(); return; }
+      const fname = key.replace(/[^a-z0-9\-]/g, "_") + ext;
+      try {
+        fs.mkdirSync(IMG_DIR, { recursive: true });
+        fs.writeFileSync(path.join(IMG_DIR, fname), buf);
+        imgIndex[key] = { file: fname, src: "user", attr: decodeURIComponent(req.headers["x-image-attr"] || "") || "your picture", v: IMG_AI_V };
+        saveImgIndexSoon();
+      } catch (e) { res.writeHead(500).end(); return; }
+      res.writeHead(200, { "Content-Type": MIME[".json"] });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    const sendEntry = (entry, buf, warn) => {
       res.writeHead(200, {
         "Content-Type": IMG_MIME[path.extname(entry.file).toLowerCase()] || "image/jpeg",
         // no-store: the app caches images itself (IndexedDB + disk); letting
@@ -612,6 +669,7 @@ const server = http.createServer(async (req, res) => {
         "x-image-source": entry.src || "",
         "x-image-attr": encodeURIComponent(entry.attr || ""),
         "x-image-v": String(entry.v || ""),
+        "x-image-warning": encodeURIComponent(warn || ""),
       });
       res.end(buf);
     };
@@ -626,18 +684,34 @@ const server = http.createServer(async (req, res) => {
       try { sendEntry(cached, fs.readFileSync(path.join(IMG_DIR, cached.file))); return; }
       catch { delete imgIndex[key]; } // cached file vanished — refetch below
     }
-    let got = null;
+    // the browser sends the user's OpenAI key only when ChatGPT pictures are on
+    const oaKey = req.headers["x-openai-key"] || "";
+    const oaModel = req.headers["x-openai-model"] || "";
+    let got = null, oaError = null;
     if (forced && FETCHERS[forced]) {
-      try { got = forced === "openverse" ? await fetchOpenverseImage(word, true) : await FETCHERS[forced](word); }
-      catch { got = null; }
+      try {
+        if (forced === "openverse") got = await fetchOpenverseImage(word, true);
+        else if (forced === "ai" && oaKey) got = await fetchOpenAiImage(word, oaKey, oaModel); // ChatGPT replaces the free model
+        else got = await FETCHERS[forced](word);
+      } catch (e) { got = null; if (forced === "ai" && oaKey) oaError = e.message; }
     } else {
-      // Wikipedia -> Openverse -> Pollinations, first hit wins
-      for (const fn of [fetchWikiImage, fetchOpenverseImage, fetchAiImage]) {
+      // Wikipedia -> Openverse -> (ChatGPT when configured) -> Pollinations
+      const chain = [fetchWikiImage, fetchOpenverseImage];
+      if (oaKey) chain.push(async (w) => { try { return await fetchOpenAiImage(w, oaKey, oaModel); } catch (e) { oaError = e.message; return null; } });
+      chain.push(fetchAiImage);
+      for (const fn of chain) {
         try { got = await fn(word); } catch { got = null; }
         if (got) break;
       }
     }
-    if (!got) { res.writeHead(503).end(); return; } // nothing cached — client retries later
+    if (!got) {
+      if (oaError) { // tell the user why their paid generation failed
+        res.writeHead(502, { "Content-Type": MIME[".json"] });
+        res.end(JSON.stringify({ error: oaError }));
+        return;
+      }
+      res.writeHead(503).end(); return; // nothing cached — client retries later
+    }
     const fname = key.replace(/[^a-z0-9\-]/g, "_") + got.ext;
     try {
       fs.mkdirSync(IMG_DIR, { recursive: true });
@@ -645,7 +719,7 @@ const server = http.createServer(async (req, res) => {
       imgIndex[key] = { file: fname, src: got.src, attr: got.attr, v: got.v };
       saveImgIndexSoon();
     } catch {}
-    sendEntry({ file: fname, src: got.src, attr: got.attr }, got.buf);
+    sendEntry({ file: fname, src: got.src, attr: got.attr, v: got.v }, got.buf, got.src !== "openai" ? oaError : null);
     return;
   }
 

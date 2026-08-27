@@ -109,7 +109,33 @@ also triggers the check.)
   AI (a fresh generation each time) → hidden — and remembers your choice.
   AI prompts are built from the word's dictionary definition so generated
   scenes depict the meaning, and Wikipedia articles about unrelated senses
-  (surnames, films, bands) are skipped.
+  (surnames, films, bands) are skipped. You can also supply a picture
+  yourself: paste one (`Ctrl+V`) or drop an image file onto the card and it
+  becomes that word's picture, cached like the others.
+- **ChatGPT pictures** (`🤖 ChatGPT` in the header): the free AI model is
+  weak, so the app offers two ways to get OpenAI-quality pictures instead.
+  The free model stays the default; nothing changes until you opt in.
+  - *With your ChatGPT subscription (manual).* OpenAI does not let other apps
+    drive a chat subscription, so this path is one click plus one paste: the
+    **💬 ChatGPT** button under a picture opens chatgpt.com in a new tab with
+    the prompt already filled in (*Please draw a picture of the word "norm".
+    In the picture do not show the word "norm" itself.* — it is also copied to
+    the clipboard in case the prefill fails). Copy the picture ChatGPT draws,
+    come back and press `Ctrl+V`; it is saved for that word. No settings
+    needed.
+  - *Automatically, with an API key.* An OpenAI **API key** (from
+    platform.openai.com — separate pay-as-you-go billing, not included in
+    ChatGPT Plus; roughly $0.01–0.04 per picture) lets the app generate with
+    the same image model by itself: enter it in the 🤖 ChatGPT dialog, pick
+    `gpt-image-1` (cheap) or DALL·E 3, tick **Use ChatGPT for AI pictures**,
+    and every AI picture from then on — the automatic fallback after Wikipedia
+    and Openverse, and each **↻ another** generation — comes from OpenAI.
+    Words that already have a cached picture are not regenerated. **⬇ Cache
+    never uses the key** (it would generate hundreds of paid pictures), so
+    bulk caching stays free; a failed paid request shows OpenAI's error in a
+    toast and the app falls back to the free model. The key is stored only in
+    this browser's localStorage and sent only to the local server and
+    api.openai.com — never written to any file in this folder.
 - **Shuffle**, **mark as known + skip known words**, and a **searchable word
   list** for jumping around.
 
@@ -153,6 +179,9 @@ cached locally on your machine:
   image credited with creator and license), and
   [Pollinations](https://pollinations.ai) for AI-generated illustrations (a
   free community service — it may change or stop working at any time).
+  Optionally, [OpenAI](https://platform.openai.com) image models with the
+  user's own API key, and pictures the user pastes in (e.g. drawn in their
+  own ChatGPT account) — those are the user's to license as they see fit.
 - **Pronunciation audio**, tried in this order:
   1. [Wikimedia Commons](https://commons.wikimedia.org) — the CC-licensed human
      recordings behind Wiktionary, via the official API (partial coverage);
@@ -186,3 +215,5 @@ Important notes for contributors and forks:
 | `P` | Pronounce the word |
 | `A` | Toggle auto-pronounce |
 | `L` | Open the word list |
+| `Ctrl+V` | Paste a picture for the current word (e.g. one drawn by ChatGPT) |
+| `Esc` | Close the ChatGPT settings dialog |
