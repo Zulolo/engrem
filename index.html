@@ -32,9 +32,10 @@
     }
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; }
+  html { height: 100%; }
   body {
     margin: 0;
+    min-height: 100%;
     font-family: "Segoe UI", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     background: var(--bg);
     color: var(--text);
@@ -139,6 +140,7 @@
   #listPanel {
     width: 270px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
     box-shadow: var(--shadow); display: none; flex-direction: column; overflow: hidden;
+    align-self: flex-start; position: sticky; top: 1rem; max-height: calc(100vh - 2rem);
   }
   #listPanel.open { display: flex; }
   #listPanel input {
