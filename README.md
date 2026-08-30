@@ -38,11 +38,12 @@ also triggers the check.)
 
 ## Features
 
-- **EN → ZH mode**: shows the English word and phonetic. Recall happens in two
-  stages: **💡 Hint** reveals only the picture, **Show Answer** reveals the
-  Chinese translation as well. `Space` walks the cycle — first press hint,
-  second press answer, third press hides both again (with pictures off, Space
-  simply toggles the answer).
+- **EN → ZH mode**: shows the English word and phonetic — entries the Youdao
+  export left without one get their IPA from Wiktionary, kept with the word
+  list. Recall happens in two stages: **💡 Hint** reveals only the picture,
+  **Show Answer** reveals the Chinese translation as well. `Space` walks the
+  cycle — first press hint, second press answer, third press hides both again
+  (with pictures off, Space simply toggles the answer).
 - **ZH → EN mode**: shows the Chinese translation with the English word hidden; in
   example sentences only the word's core is blanked while affixes stay visible
   as a grammatical hint — *thawed* shows as `____ed`, *inadvertently* as
@@ -80,9 +81,9 @@ also triggers the check.)
     with no examples.
   - The **🧹 Clear cache** button deletes all cached examples and audio — both
     the browser's IndexedDB stores and, in server mode, the disk caches
-    (`examples-cache.json`, `audio-cache/`). Words, study position, and
-    known-marks are untouched. Use it to force a re-fetch, e.g. after the
-    example/pronunciation sources change.
+    (`examples-cache.json`, `phonetic-cache.json`, `audio-cache/`). Words,
+    study position, and known-marks are untouched. Use it to force a re-fetch,
+    e.g. after the example/pronunciation sources change.
 - **Real pronunciation with caching**: audio comes from Wikimedia Commons and
   the Free Dictionary API where available (real human recordings), with Youdao's
   voice service filling coverage gaps (see Credits). It is cached in the
@@ -174,6 +175,9 @@ cached locally on your machine:
   [Free Dictionary API](https://dictionaryapi.dev), and the
   [Wiktionary REST API](https://en.wiktionary.org/api/rest_v1/) — the latter
   two serve [Wiktionary](https://www.wiktionary.org) content (CC BY-SA).
+- **Phonetics** (for entries whose export lacks one): the
+  [Wiktionary API](https://en.wiktionary.org/w/api.php) (CC BY-SA), then the
+  [Free Dictionary API](https://dictionaryapi.dev).
 - **Pictures**: [Wikipedia](https://en.wikipedia.org) article thumbnails,
   [Openverse](https://openverse.org) (Creative-Commons image search — each
   image credited with creator and license), and
@@ -197,8 +201,8 @@ Important notes for contributors and forks:
 - **Never commit personal wordbook exports.** The `<trans>` definitions inside
   them are Youdao's copyrighted dictionary content. The `.gitignore` excludes
   all `.xml` files except the hand-written `sample_wordbook.xml`, plus the
-  local caches (`examples-cache.json`, `audio-cache/`, `image-cache/`) that accumulate
-  third-party content.
+  local caches (`examples-cache.json`, `phonetic-cache.json`, `audio-cache/`,
+  `image-cache/`) that accumulate third-party content.
 - This project is an independent study tool. It is **not affiliated with,
   endorsed by, or connected to NetEase Youdao (网易有道翻译)** in any way; the
   name is used only to describe file-format compatibility.

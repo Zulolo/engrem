@@ -3,6 +3,9 @@
  *   /api/list                 — JSON listing of the XML files in this folder
  *   /api/examples?word=<w>    — example sentences for a word, fetched once from
  *                               public APIs and cached on disk (examples-cache.json)
+ *   /api/phonetic?word=<w>    — IPA for a word whose wordbook entry lacks one
+ *                               (Wiktionary, then the Free Dictionary API; cached
+ *                               on disk in phonetic-cache.json)
  * Start it with EngRem.bat or: node server.js
  */
 "use strict";
@@ -76,6 +79,20 @@ setInterval(() => {
   try { fs.mkdirSync(IMG_DIR, { recursive: true }); } catch {}
   fs.writeFile(IMG_INDEX, JSON.stringify(imgIndex), (e) => {
     if (e) console.error("Could not write image index:", e.message);
+  });
+}, 3000).unref();
+
+/* ---------- phonetic cache (disk-backed) ---------- */
+const PHON_FILE = path.join(ROOT, "phonetic-cache.json");
+let phonCache = {}; // word -> { p: "[ipa]" or "" (no dictionary has it), ts }
+try { phonCache = JSON.parse(fs.readFileSync(PHON_FILE, "utf-8")); } catch {}
+let phonDirty = false;
+function savePhonCacheSoon() { phonDirty = true; }
+setInterval(() => {
+  if (!phonDirty) return;
+  phonDirty = false;
+  fs.writeFile(PHON_FILE, JSON.stringify(phonCache), (e) => {
+    if (e) console.error("Could not write phonetic cache:", e.message);
   });
 }, 3000).unref();
 
@@ -564,6 +581,86 @@ async function searchSentences(word) {
   return { ok: okAny && (picked.length > 0 || !throttled), sentences: picked };
 }
 
+/* ---------- phonetics (Youdao exports often leave the field empty) ---------- */
+/* One IPA from a Wiktionary page's wikitext: the {{IPA|en|...}} lines of its
+   ==English== section — General American first (Youdao's exports use American
+   IPA), then unlabelled, then RP, then the rest, in page order within a rank. */
+function pickWiktIpa(wikitext) {
+  const head = /^==\s*English\s*==\s*$/m.exec(wikitext);
+  if (!head) return "";
+  const rest = wikitext.slice(head.index + head[0].length);
+  const next = /^==[^=]/m.exec(rest); // the next language's level-2 heading
+  const sec = next ? rest.slice(0, next.index) : rest;
+  const found = [];
+  const re = /(?:\{\{a\|([^}]*)\}\}[^\n{]*)?\{\{IPA\|en\|([^}]*)\}\}/g;
+  let m;
+  while ((m = re.exec(sec))) {
+    const parts = m[2].split("|").map((p) => p.trim());
+    const accent = [m[1] || "", ...parts.filter((p) => /^a\d*=/.test(p)).map((p) => p.slice(p.indexOf("=") + 1))]
+      .join(",").toUpperCase();
+    const ipa = parts.find((p) => /^\/.+\/$/.test(p)) || parts.find((p) => /^\[.+\]$/.test(p)); // phonemic over phonetic
+    if (ipa) found.push({ ipa, accent });
+  }
+  const rank = (a) => (/\b(US|GA|GENAM)\b/.test(a) ? 0 : !a ? 1 : /\b(RP|UK|GB)\b/.test(a) ? 2 : 3);
+  found.sort((x, y) => rank(x.accent) - rank(y.accent)); // stable sort keeps page order within a rank
+  return found.length ? found[0].ipa : "";
+}
+
+/* One IPA from a Free Dictionary API response: the reading paired with the
+   US recording when labelled, else the entry-level one, else the first. */
+function pickDictIpa(data) {
+  let first = "";
+  for (const e of Array.isArray(data) ? data : []) {
+    for (const ph of e.phonetics || []) {
+      if (!ph.text) continue;
+      if ((ph.audio || "").includes("-us.")) return ph.text;
+      if (!first) first = ph.text;
+    }
+    if (!first && e.phonetic) first = e.phonetic;
+  }
+  return first;
+}
+
+/* Youdao writes [ipa]; the APIs write /ipa/ or [ipa]. */
+function youdaoStyle(ipa) {
+  const core = String(ipa).trim().replace(/^[/[]+|[/\]]+$/g, "").trim();
+  return core ? "[" + core + "]" : "";
+}
+
+/* Returns {ok, phonetic}. ok=false means a network failure may have hidden the
+   answer — don't cache that. ok=true with "" means no dictionary has it. */
+async function fetchPhonetic(word) {
+  if (/\s/.test(word)) return { ok: true, phonetic: "" }; // phrases carry no IPA, as in Youdao
+  const TIMEOUT = 8000;
+  let failed = false;
+  const wiktQuery = async (term) => {
+    try {
+      const r = await fetch("https://en.wiktionary.org/w/api.php?action=parse&prop=wikitext&format=json&formatversion=2&page=" +
+        encodeURIComponent(term), { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(TIMEOUT) });
+      if (!r.ok) { failed = true; return ""; }
+      const d = await r.json();
+      if (d.error) { if (d.error.code !== "missingtitle") failed = true; return ""; }
+      return youdaoStyle(pickWiktIpa((d.parse && d.parse.wikitext) || ""));
+    } catch { failed = true; return ""; }
+  };
+  const dictQuery = async (term) => {
+    try {
+      const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(term),
+        { signal: AbortSignal.timeout(TIMEOUT) });
+      if (r.ok) return youdaoStyle(pickDictIpa(await r.json()));
+      if (r.status !== 404) failed = true; // 404 = simply not in that dictionary
+    } catch { failed = true; }
+    return "";
+  };
+  // the word itself first; an inflected entry ("thawed") falls back to its base form
+  const terms = [...new Set([word.toLowerCase(), ...lemmaCandidates(word)])].slice(0, 2);
+  for (const t of terms) {
+    const p = (await wiktQuery(t)) || (await dictQuery(t));
+    if (p) return { ok: true, phonetic: p };
+  }
+  return { ok: !failed, phonetic: "" };
+}
+
 /* ---------- http server ---------- */
 const server = http.createServer(async (req, res) => {
   let url;
@@ -618,6 +715,29 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/api/phonetic") {
+    const word = (url.searchParams.get("word") || "").trim();
+    if (!word || word.length > 100) {
+      res.writeHead(400, { "Content-Type": MIME[".json"] });
+      res.end(JSON.stringify({ ok: false, phonetic: "", error: "missing word" }));
+      return;
+    }
+    const key = word.toLowerCase();
+    if (phonCache[key]) {
+      res.writeHead(200, { "Content-Type": MIME[".json"] });
+      res.end(JSON.stringify({ ok: true, cached: true, phonetic: phonCache[key].p }));
+      return;
+    }
+    const result = await fetchPhonetic(word);
+    if (result.ok) {
+      phonCache[key] = { p: result.phonetic, ts: Date.now() };
+      savePhonCacheSoon();
+    }
+    res.writeHead(200, { "Content-Type": MIME[".json"] });
+    res.end(JSON.stringify({ ok: result.ok, cached: false, phonetic: result.phonetic }));
+    return;
+  }
+
   if (pathname === "/api/clear-cache") {
     if (req.method !== "POST") { res.writeHead(405).end(); return; }
     exCache = {}; cacheDirty = false;
@@ -626,6 +746,8 @@ const server = http.createServer(async (req, res) => {
     try { fs.rmSync(AUDIO_DIR, { recursive: true, force: true }); } catch {}
     imgIndex = {}; imgDirty = false;
     try { fs.rmSync(IMG_DIR, { recursive: true, force: true }); } catch {}
+    phonCache = {}; phonDirty = false;
+    try { fs.rmSync(PHON_FILE, { force: true }); } catch {}
     console.log("Caches cleared by client request");
     res.writeHead(200, { "Content-Type": MIME[".json"] });
     res.end(JSON.stringify({ ok: true }));

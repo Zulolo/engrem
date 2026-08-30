@@ -3,7 +3,8 @@
 *.xml
 !sample_wordbook.xml
 
-# Local caches of third-party content (Tatoeba / Wiktionary sentences, audio)
+# Local caches of third-party content (Tatoeba / Wiktionary sentences, phonetics, audio)
 examples-cache.json
+phonetic-cache.json
 audio-cache/
 image-cache/

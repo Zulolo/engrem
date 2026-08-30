@@ -875,15 +875,15 @@ function render() {
     wordLine.className = "";
     wordLine.textContent = entry.word;
     phon.textContent = entry.phonetic || "";
-    if (!entry.phonetic) fillPhonetic(entry);
     answer.innerHTML = esc(entry.trans || "(no translation)");
   } else {
     wordLine.className = "zh";
     wordLine.textContent = entry.trans || "(no translation)";
     phon.textContent = "";
     answer.innerHTML = '<span class="en-answer">' + esc(entry.word) + "</span>" +
-      (entry.phonetic ? '<div style="text-align:center;color:var(--muted)">' + esc(entry.phonetic) + "</div>" : "");
+      (entry.phonetic ? '<div class="en-phon" style="text-align:center;color:var(--muted)">' + esc(entry.phonetic) + "</div>" : "");
   }
+  if (!entry.phonetic) fillPhonetic(entry); // Youdao exports often leave the field empty
   answer.classList.toggle("hidden", !revealed);
   $("revealBtn").classList.toggle("hidden", revealed);
   $("hintBtn").classList.toggle("hidden", revealed || hintShown || mode !== "en2zh" || !showImages);
@@ -966,10 +966,12 @@ function prefetchAround() {
   if (!order.length) return;
   const cur = current();
   const targets = [1, 2, 3, -1]
-    .map((d) => words[order[(pos + d + order.length) % order.length]].word)
-    .filter((w, i, a) => a.indexOf(w) === i && (!cur || w !== cur.word));
+    .map((d) => words[order[(pos + d + order.length) % order.length]])
+    .filter((e, i, a) => a.indexOf(e) === i && (!cur || e.word !== cur.word));
   (async () => {
-    for (const w of targets) {
+    for (const e of targets) {
+      const w = e.word;
+      if (!e.phonetic) await fillPhonetic(e);
       if (!exMem.has(w)) await loadExamples(w); // sequential — gentle on the APIs
       if (!audioMem.has(w)) await ensureAudioCached(w);
       if (showImages && !imgMem.has(w)) await loadImage(w);
@@ -1404,31 +1406,125 @@ function toggleFamiliar() {
 }
 
 /* ---------------- phonetics (fill gaps in the Youdao export) ---------------- */
-const phoneticTried = new Set(); // per-session: do not hammer the API on misses
-async function fillPhonetic(entry) {
-  const word = entry.word;
-  if (entry.phonetic || /s/.test(word) || phoneticTried.has(word)) return;
-  phoneticTried.add(word);
-  const terms = [...new Set([word.toLowerCase(), ...lemmaCandidates(word)])].slice(0, 2);
-  for (const t of terms) {
+/* word -> Infinity once settled (found, or no dictionary has it), else the time
+   a retry is allowed after a network failure — one flaky API must not hide a
+   word's IPA for the whole session. */
+const phoneticNext = new Map();
+const PHON_RETRY_MS = 60000;
+
+/* One IPA from a Wiktionary page's wikitext: the {{IPA|en|...}} lines of its
+   ==English== section — General American first (Youdao's exports use American
+   IPA), then unlabelled, then RP, then the rest, in page order within a rank. */
+function pickWiktIpa(wikitext) {
+  const head = /^==\s*English\s*==\s*$/m.exec(wikitext);
+  if (!head) return "";
+  const rest = wikitext.slice(head.index + head[0].length);
+  const next = /^==[^=]/m.exec(rest); // the next language's level-2 heading
+  const sec = next ? rest.slice(0, next.index) : rest;
+  const found = [];
+  const re = /(?:\{\{a\|([^}]*)\}\}[^\n{]*)?\{\{IPA\|en\|([^}]*)\}\}/g;
+  let m;
+  while ((m = re.exec(sec))) {
+    const parts = m[2].split("|").map((p) => p.trim());
+    const accent = [m[1] || "", ...parts.filter((p) => /^a\d*=/.test(p)).map((p) => p.slice(p.indexOf("=") + 1))]
+      .join(",").toUpperCase();
+    const ipa = parts.find((p) => /^\/.+\/$/.test(p)) || parts.find((p) => /^\[.+\]$/.test(p)); // phonemic over phonetic
+    if (ipa) found.push({ ipa, accent });
+  }
+  const rank = (a) => (/\b(US|GA|GENAM)\b/.test(a) ? 0 : !a ? 1 : /\b(RP|UK|GB)\b/.test(a) ? 2 : 3);
+  found.sort((x, y) => rank(x.accent) - rank(y.accent)); // stable sort keeps page order within a rank
+  return found.length ? found[0].ipa : "";
+}
+
+/* One IPA from a Free Dictionary API response: the reading paired with the
+   US recording when labelled, else the entry-level one, else the first. */
+function pickDictIpa(data) {
+  let first = "";
+  for (const e of Array.isArray(data) ? data : []) {
+    for (const ph of e.phonetics || []) {
+      if (!ph.text) continue;
+      if ((ph.audio || "").includes("-us.")) return ph.text;
+      if (!first) first = ph.text;
+    }
+    if (!first && e.phonetic) first = e.phonetic;
+  }
+  return first;
+}
+
+/* Youdao writes [ipa]; the APIs write /ipa/ or [ipa]. */
+function youdaoStyle(ipa) {
+  const core = String(ipa).trim().replace(/^[/[]+|[/\]]+$/g, "").trim();
+  return core ? "[" + core + "]" : "";
+}
+
+/* Returns {ok, phonetic}. ok=false means a network failure may have hidden the
+   answer — retry later. ok=true with "" means no dictionary has it.
+   Served mode asks the local server (disk cache shared by all browsers);
+   file:// mode runs the same chain directly — both hosts allow CORS. */
+async function lookupPhonetic(word) {
+  if (servedMode) {
     try {
-      const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(t));
-      if (!r.ok) continue;
-      const d = await r.json();
-      let p = "";
-      for (const e of Array.isArray(d) ? d : []) {
-        if (e.phonetic) { p = e.phonetic; break; }
-        for (const ph of e.phonetics || []) if (ph.text) { p = ph.text; break; }
-        if (p) break;
-      }
-      if (p) {
-        entry.phonetic = "[" + p.replace(new RegExp("^/+|/+$", "g"), "") + "]"; // /…/ -> […] like Youdao
-        saveJSON(LS.words, words); // persists across sessions
-        const cur = current();
-        if (cur && cur.word === word && mode === "en2zh") $("phonetic").textContent = entry.phonetic;
-        return;
+      const r = await fetch("api/phonetic?word=" + encodeURIComponent(word));
+      if (r.ok) {
+        const d = await r.json();
+        if (d && typeof d.phonetic === "string") return { ok: d.ok !== false, phonetic: d.phonetic };
       }
     } catch {}
+    // endpoint missing/broken — fall through to direct fetch
+  }
+  const TIMEOUT = 8000;
+  let failed = false;
+  const wiktQuery = async (term) => {
+    try {
+      const r = await fetch("https://en.wiktionary.org/w/api.php?action=parse&prop=wikitext&format=json&formatversion=2&origin=*&page=" +
+        encodeURIComponent(term), { signal: AbortSignal.timeout(TIMEOUT) });
+      if (!r.ok) { failed = true; return ""; }
+      const d = await r.json();
+      if (d.error) { if (d.error.code !== "missingtitle") failed = true; return ""; }
+      return youdaoStyle(pickWiktIpa((d.parse && d.parse.wikitext) || ""));
+    } catch { failed = true; return ""; }
+  };
+  const dictQuery = async (term) => {
+    try {
+      const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + encodeURIComponent(term),
+        { signal: AbortSignal.timeout(TIMEOUT) });
+      if (r.ok) return youdaoStyle(pickDictIpa(await r.json()));
+      if (r.status !== 404) failed = true; // 404 = simply not in that dictionary
+    } catch { failed = true; }
+    return "";
+  };
+  // the word itself first; an inflected entry ("thawed") falls back to its base form
+  const terms = [...new Set([word.toLowerCase(), ...lemmaCandidates(word)])].slice(0, 2);
+  for (const t of terms) {
+    const p = (await wiktQuery(t)) || (await dictQuery(t));
+    if (p) return { ok: true, phonetic: p };
+  }
+  return { ok: !failed, phonetic: "" };
+}
+
+async function fillPhonetic(entry) {
+  const word = entry.word;
+  if (entry.phonetic || /\s/.test(word) || (phoneticNext.get(word) || 0) > Date.now()) return;
+  phoneticNext.set(word, Infinity); // in flight
+  const res = await lookupPhonetic(word);
+  if (!res.ok) { phoneticNext.set(word, Date.now() + PHON_RETRY_MS); return; }
+  if (!res.phonetic) return; // settled: no dictionary has it
+  // a re-import may have replaced the word objects meanwhile
+  const live = words.find((w) => w.word === word) || entry;
+  live.phonetic = res.phonetic;
+  saveJSON(LS.words, words); // persists across sessions (and re-imports, see importText)
+  showPhonetic(live);
+}
+
+/* Update the card in place if the word is still on screen. */
+function showPhonetic(entry) {
+  const cur = current();
+  if (!cur || cur.word !== entry.word) return;
+  if (mode === "en2zh") { $("phonetic").textContent = entry.phonetic; return; }
+  const answer = $("answer");
+  if (answer.querySelector(".en-answer") && !answer.querySelector(".en-phon")) {
+    answer.insertAdjacentHTML("beforeend",
+      '<div class="en-phon" style="text-align:center;color:var(--muted)">' + esc(entry.phonetic) + "</div>");
   }
 }
 
