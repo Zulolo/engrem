@@ -69,6 +69,12 @@ also triggers the check.)
   - In `EngRem.bat` mode the server keeps its own disk cache
     (`examples-cache.json`), shared by all browsers; each word hits the public
     APIs at most once, ever.
+  - `EngRem.bat` mode also mirrors your words, position and known-marks to
+    `state.json` next to the server, and the server re-uses its last port.
+    Browsers tie saved data to the exact port, and Windows occasionally forces
+    the server onto a new one (its reserved port ranges move after a reboot) —
+    the sticky port avoids that, and the mirror restores your progress even
+    when the port does have to change.
   - The **⬇ Cache** button in the header downloads examples and pronunciation
     for the entire wordbook into the cache, a few words in parallel (click
     again to pause). The counter shows how many words already have cached
@@ -200,9 +206,10 @@ Important notes for contributors and forks:
 
 - **Never commit personal wordbook exports.** The `<trans>` definitions inside
   them are Youdao's copyrighted dictionary content. The `.gitignore` excludes
-  all `.xml` files except the hand-written `sample_wordbook.xml`, plus the
-  local caches (`examples-cache.json`, `phonetic-cache.json`, `audio-cache/`,
-  `image-cache/`) that accumulate third-party content.
+  all `.xml` files except the hand-written `sample_wordbook.xml`, plus
+  `state.json` (the study-state mirror holds a copy of the imported wordbook)
+  and the local caches (`examples-cache.json`, `phonetic-cache.json`,
+  `audio-cache/`, `image-cache/`) that accumulate third-party content.
 - This project is an independent study tool. It is **not affiliated with,
   endorsed by, or connected to NetEase Youdao (网易有道翻译)** in any way; the
   name is used only to describe file-format compatibility.

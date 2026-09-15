@@ -307,7 +307,8 @@
   <div id="aiPanel" class="card">
     <h3>🤖 ChatGPT pictures</h3>
     <p class="small"><b>With your ChatGPT subscription (manual):</b> click <b>💬 ChatGPT</b> under any
-      picture — ChatGPT opens in a new tab with the drawing prompt filled in. Copy the picture it draws,
+      picture — ChatGPT's <b>Images</b> page opens in a new tab with the drawing prompt filled in
+      (it is also copied, so just paste if the box comes up empty). Copy the picture it draws,
       come back and press <b>Ctrl+V</b> (or drop the saved file on the card); it is stored as that word's
       picture. No settings needed.</p>
     <p class="small"><b>Automatically, with an API key:</b> OpenAI's chat subscription cannot be linked to
@@ -364,16 +365,50 @@ function loadJSON(key, fallback) {
   catch { return fallback; }
 }
 function saveJSON(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); return true; }
+  try { localStorage.setItem(key, JSON.stringify(val)); scheduleStateSync(key); return true; }
   catch (e) { /* quota — drop the legacy example cache and retry once */
     if (key !== LS.exCache) {
-      try { localStorage.removeItem(LS.exCache); localStorage.setItem(key, JSON.stringify(val)); return true; } catch {}
+      try { localStorage.removeItem(LS.exCache); localStorage.setItem(key, JSON.stringify(val)); scheduleStateSync(key); return true; } catch {}
     }
     // never fail silently: a dropped save means the next launch quietly
     // reverts to older data
     try { toast("Could not save to browser storage — changes may not persist"); } catch {}
     return false;
   }
+}
+
+/* The browser keys localStorage by host:PORT, and Windows sometimes forces
+   server.js onto a new port (its reserved port ranges move after a reboot) —
+   the study data then looks gone and the import page greets a long-time user.
+   In served mode the state is therefore mirrored to the server's disk
+   (state.json) and adopted from there whenever this origin has none. The
+   OpenAI key is deliberately NOT mirrored: the settings dialog promises it
+   never leaves the browser. */
+const SYNC_KEYS = [LS.words, LS.state, LS.familiar, LS.lastImport];
+let stateSyncTimer = 0;
+function scheduleStateSync(key) {
+  if (!servedMode || !SYNC_KEYS.includes(key)) return;
+  clearTimeout(stateSyncTimer);
+  stateSyncTimer = setTimeout(() => {
+    const body = {};
+    for (const k of SYNC_KEYS) {
+      const v = loadJSON(k, undefined);
+      if (v !== undefined) body[k] = v;
+    }
+    fetch("api/state", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      .catch(() => {}); // older server without the endpoint — localStorage still has everything
+  }, 1500);
+}
+async function adoptServerState() {
+  if (!servedMode || loadJSON(LS.words, []).length) return; // this origin already has data
+  try {
+    const r = await fetch("api/state", { cache: "no-store", signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return;
+    const d = await r.json();
+    let got = false;
+    for (const k of SYNC_KEYS) if (d && d[k] !== undefined) { saveJSON(k, d[k]); got = true; }
+    if (got) toast("Progress restored — the app moved to a new port, your data came along");
+  } catch {}
 }
 
 /* ---------------- XML import ---------------- */
@@ -1784,8 +1819,9 @@ function askChatGPT() {
   if (!entry) return;
   const prompt = chatPrompt(entry.word);
   if (navigator.clipboard) navigator.clipboard.writeText(prompt).catch(() => {}); // backup if the URL prefill fails
-  window.open("https://chatgpt.com/?q=" + encodeURIComponent(prompt), "_blank", "noopener");
-  toast("ChatGPT opened with the prompt (also copied). Copy its picture, come back and press Ctrl+V");
+  // the Images page (image mode straight away), not a plain new chat
+  window.open("https://chatgpt.com/images?q=" + encodeURIComponent(prompt), "_blank", "noopener");
+  toast("ChatGPT Images opened with the prompt (also copied). Copy its picture, come back and press Ctrl+V");
 }
 async function setUserImage(blob) {
   const entry = current();
@@ -2074,9 +2110,6 @@ $("shuffleBtn").addEventListener("click", () => {
 $("autoSpeakBtn").addEventListener("click", () => {
   autoSpeak = !autoSpeak;
   $("autoSpeakBtn").classList.toggle("toggled", autoSpeak);
-  $("imgBtn").classList.toggle("toggled", showImages);
-  openai = Object.assign({}, openai, loadJSON(LS.openai, {}));
-  $("aiBtn").classList.toggle("toggled", openaiReady());
   saveState();
   toast(autoSpeak ? "Auto-pronounce on" : "Auto-pronounce off");
   if (autoSpeak && !$("studyWrap").classList.contains("hidden") && (mode === "en2zh" || revealed)) speak();
@@ -2089,6 +2122,8 @@ function saveAiSettings() {
   $("aiBtn").classList.toggle("toggled", openaiReady());
 }
 $("aiBtn").addEventListener("click", () => {
+  openai = Object.assign({}, openai, loadJSON(LS.openai, {})); // pick up settings saved from another browser
+  $("aiBtn").classList.toggle("toggled", openaiReady());
   $("aiKey").value = openai.key || "";
   $("aiModel").value = openai.model || "gpt-image-1";
   $("aiEnabled").checked = !!openai.enabled;
@@ -2127,8 +2162,6 @@ $("imgAsk").addEventListener("click", askChatGPT);
 $("imgBtn").addEventListener("click", () => {
   showImages = !showImages;
   $("imgBtn").classList.toggle("toggled", showImages);
-  openai = Object.assign({}, openai, loadJSON(LS.openai, {}));
-  $("aiBtn").classList.toggle("toggled", openaiReady());
   saveState();
   renderImage();
 });
@@ -2252,7 +2285,8 @@ function toast(msg) {
 }
 
 /* ---------------- init ---------------- */
-(function init() {
+(async function init() {
+  await adoptServerState(); // before the first read: a moved port must not look like a fresh start
   words = loadJSON(LS.words, []);
   familiar = new Set(loadJSON(LS.familiar, []));
   // migrate data imported before word-case normalization existed
@@ -2290,6 +2324,11 @@ function toast(msg) {
   $("shuffleBtn").classList.toggle("toggled", shuffled);
   $("hideFamBtn").classList.toggle("toggled", hideFamiliar);
   $("autoSpeakBtn").classList.toggle("toggled", autoSpeak);
+  $("imgBtn").classList.toggle("toggled", showImages);
+  // the ChatGPT settings used to be read only inside button handlers, so a
+  // saved key silently did nothing until some unrelated click — load them here
+  openai = Object.assign({}, openai, loadJSON(LS.openai, {}));
+  $("aiBtn").classList.toggle("toggled", openaiReady());
 
   if (words.length) {
     if (st && Array.isArray(st.order) && st.order.length && st.order.every((i) => i >= 0 && i < words.length)) {

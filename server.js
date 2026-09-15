@@ -6,6 +6,9 @@
  *   /api/phonetic?word=<w>    — IPA for a word whose wordbook entry lacks one
  *                               (Wiktionary, then the Free Dictionary API; cached
  *                               on disk in phonetic-cache.json)
+ *   /api/state                — GET/POST mirror of the browser's study data
+ *                               (state.json), so progress survives the forced
+ *                               port changes Windows sometimes causes
  * Start it with EngRem.bat or: node server.js
  */
 "use strict";
@@ -95,6 +98,30 @@ setInterval(() => {
     if (e) console.error("Could not write phonetic cache:", e.message);
   });
 }, 3000).unref();
+
+/* ---------- study state + port memory (disk-backed) ----------
+   The browser keys localStorage by host:PORT, and Windows sometimes forces
+   this server onto a new port (see listen() at the bottom) — to the browser
+   the study data then looks gone. Two defences: the client mirrors its state
+   here so any port can restore it, and the bound port is remembered so the
+   next launch tries the same one first. */
+const STATE_FILE = path.join(ROOT, "state.json");
+const PORT_FILE = path.join(ROOT, "last-port.json");
+let stateBody = null; // raw JSON string, exactly as the client sent it
+try { stateBody = fs.readFileSync(STATE_FILE, "utf-8"); } catch {}
+let stateDirty = false;
+function saveStateSoon() { stateDirty = true; }
+setInterval(() => {
+  if (!stateDirty) return;
+  stateDirty = false;
+  fs.writeFile(STATE_FILE, stateBody || "{}", (e) => {
+    if (e) console.error("Could not write state:", e.message);
+  });
+}, 3000).unref();
+let lastPort = 0;
+if (!process.env.ENGREM_PORT) { // an explicitly requested port always wins over the memory
+  try { lastPort = parseInt(fs.readFileSync(PORT_FILE, "utf-8"), 10) || 0; } catch {}
+}
 
 function extFromContentType(ct) {
   ct = (ct || "").toLowerCase();
@@ -738,6 +765,30 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/api/state") {
+    if (req.method === "POST") {
+      let size = 0;
+      const chunks = [];
+      req.on("data", (c) => {
+        size += c.length;
+        if (size > 20 * 1024 * 1024) { req.destroy(); return; } // a wordbook is well under 1 MB
+        chunks.push(c);
+      });
+      req.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf-8");
+        try { JSON.parse(body); } catch { res.writeHead(400).end(); return; }
+        stateBody = body;
+        saveStateSoon();
+        res.writeHead(200, { "Content-Type": MIME[".json"] });
+        res.end(JSON.stringify({ ok: true }));
+      });
+      return;
+    }
+    res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
+    res.end(stateBody || "{}");
+    return;
+  }
+
   if (pathname === "/api/clear-cache") {
     if (req.method !== "POST") { res.writeHead(405).end(); return; }
     exCache = {}; cacheDirty = false;
@@ -936,22 +987,27 @@ const server = http.createServer(async (req, res) => {
 server.on("listening", () => {
   server.removeAllListeners("error");
   server.on("error", (e) => console.error("Server error:", e.message));
-  const url = "http://127.0.0.1:" + server.address().port + "/";
+  const port = server.address().port;
+  // remember the bound port for the next launch — but an explicit ENGREM_PORT
+  // run is a one-off override, not a preference
+  if (!process.env.ENGREM_PORT && port !== lastPort) { try { fs.writeFileSync(PORT_FILE, String(port)); } catch {} }
+  const url = "http://127.0.0.1:" + port + "/";
   console.log("EngRem is running at " + url);
   console.log("Example cache: " + CACHE_FILE + " (" + Object.keys(exCache).length + " words)");
   console.log("Keep this window open while studying; close it to stop.");
   exec('start "" "' + url + '"'); // open default browser (Windows)
 });
 
-function listen(port) {
+function listen(port, walking) {
   server.once("error", (e) => {
     // EACCES: Windows can reserve whole port ranges (Hyper-V/WinNAT), and the
     // reserved ranges move around after a reboot — walk past them, and as a
     // last resort take any free port (0 = OS-assigned)
     if ((e.code === "EADDRINUSE" || e.code === "EACCES") && port !== 0) {
-      listen(port < START_PORT + 30 ? port + 1 : 0);
+      if (!walking) listen(START_PORT, true); // the remembered port is gone — run the normal walk
+      else listen(port < START_PORT + 30 ? port + 1 : 0, true);
     } else { console.error("Failed to start server:", e.message); process.exit(1); }
   });
   server.listen(port, "127.0.0.1");
 }
-listen(START_PORT);
+listen(lastPort || START_PORT, !lastPort || lastPort === START_PORT);

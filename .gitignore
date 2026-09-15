@@ -8,3 +8,8 @@ examples-cache.json
 phonetic-cache.json
 audio-cache/
 image-cache/
+
+# Study-state mirror and port memory written by server.js — state.json holds
+# a copy of the imported wordbook (Youdao content), never commit it
+state.json
+last-port.json
