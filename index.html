@@ -1819,9 +1819,12 @@ function askChatGPT() {
   if (!entry) return;
   const prompt = chatPrompt(entry.word);
   if (navigator.clipboard) navigator.clipboard.writeText(prompt).catch(() => {}); // backup if the URL prefill fails
-  // the Images page (image mode straight away), not a plain new chat
-  window.open("https://chatgpt.com/images?q=" + encodeURIComponent(prompt), "_blank", "noopener");
-  toast("ChatGPT Images opened with the prompt (also copied). Copy its picture, come back and press Ctrl+V");
+  // the Images page, in image mode straight away. Its composer reads the
+  // `prompt` query parameter and types it into the box (ChatGPT's client code,
+  // Oct 2026); the older `q` parameter is handled by a separate auto-send path
+  // that no longer runs on this page, which left the box empty.
+  window.open("https://chatgpt.com/images?prompt=" + encodeURIComponent(prompt), "_blank", "noopener");
+  toast("ChatGPT Images opened with the prompt typed in (also copied). Send it, copy the picture, come back and press Ctrl+V");
 }
 async function setUserImage(blob) {
   const entry = current();
