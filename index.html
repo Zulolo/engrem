@@ -1819,12 +1819,16 @@ function askChatGPT() {
   if (!entry) return;
   const prompt = chatPrompt(entry.word);
   if (navigator.clipboard) navigator.clipboard.writeText(prompt).catch(() => {}); // backup if the URL prefill fails
-  // the Images page, in image mode straight away. Its composer reads the
-  // `prompt` query parameter and types it into the box (ChatGPT's client code,
-  // Oct 2026); the older `q` parameter is handled by a separate auto-send path
-  // that no longer runs on this page, which left the box empty.
-  window.open("https://chatgpt.com/images?prompt=" + encodeURIComponent(prompt), "_blank", "noopener");
-  toast("ChatGPT Images opened with the prompt typed in (also copied). Send it, copy the picture, come back and press Ctrl+V");
+  // A new chat with the image tool preselected and the prompt typed in.
+  // `prompt` is the parameter ChatGPT's composer reads to prefill its box
+  // (its `q` parameter is the auto-send variant, which is refused for links
+  // opened from another site and rewritten to `prompt` anyway); `hints` picks
+  // the tool, and `picture_v2` is the image generator (ChatGPT client code,
+  // Oct 2026). The Images gallery page (chatgpt.com/images) is meant to
+  // read `prompt` too, but in practice its box stays empty, so it is avoided.
+  const url = "https://chatgpt.com/?hints=picture_v2&prompt=" + encodeURIComponent(prompt);
+  window.open(url, "_blank", "noopener");
+  toast("ChatGPT opened in image mode with the prompt typed in (also copied). Send it, copy the picture, come back and press Ctrl+V");
 }
 async function setUserImage(blob) {
   const entry = current();
