@@ -370,6 +370,16 @@ const ADJ_LIKE = /(ent|ant|able|ible|ive|ful|ous|ic|al|ar|id|ish|less|y|ed|ing)$
 
 /* Close morphological relatives, tried only when the word itself has no
    examples anywhere (e.g. "advertent" -> "inadvertent"). */
+/* Inflected headwords a dictionary may file sentences under when the base
+   entry has none: decease -> deceases, deceased, deceasing. Non-words simply
+   come back 404, so a wrong guess costs one fast request. */
+function inflectionHeadwords(word) {
+  const w = word.toLowerCase().trim();
+  if (/\s/.test(w) || w.length < 4) return [];
+  const e = w.endsWith("e");
+  return [...new Set([w + "s", e ? w + "d" : w + "ed", (e ? w.slice(0, -1) : w) + "ing"])];
+}
+
 function relatedForms(word) {
   const w = word.toLowerCase().trim();
   if (/\s/.test(w) || w.length < 4) return [];
@@ -418,6 +428,15 @@ function wordVariantsRegex(word) {
 async function fetchExamples(word) {
   const primary = await searchSentences(word);
   if (primary.ok && primary.sentences.length === 0) {
+    // the dictionaries file sentences under inflected headwords too
+    // ("deceased" has them, "decease" has none); Tatoeba's stemmed search
+    // used to cover that gap, so sweep them first. Same family, so these are
+    // direct examples, not "related forms".
+    // (Tatoeba's search is stemmed, so it already covered these forms)
+    const infl = await Promise.all(inflectionHeadwords(word).map((f) =>
+      searchSentences(f, { skipTatoeba: true }).catch(() => ({ ok: false, sentences: [] }))));
+    const hit = infl.find((r) => r.sentences.length);
+    if (hit) return { ok: true, sentences: hit.sentences };
     // nothing anywhere — try close relatives (advertent -> inadvertent)
     // probe them all at once, so one dead end does not delay the next
     const tried = await Promise.all(relatedForms(word).map((rel) =>
@@ -492,7 +511,7 @@ async function tatoebaGate() {
    CONCURRENTLY: awaiting them one at a time made a single word take tens of
    seconds, since each source waited out its own timeout before the next
    started. Results merge in source-priority order, so the pick is unchanged. */
-async function searchSentences(word) {
+async function searchSentences(word, { skipTatoeba = false } = {}) {
   const sentences = [];
   const seen = new Set();
   // near-duplicate key: contraction- and punctuation-insensitive
@@ -570,7 +589,12 @@ async function searchSentences(word) {
       const data = await r.json();
       for (const s of (data && data.data) || []) out.push([s.text, "tatoeba"]);
       return { ok: true, out };
-    } catch { tatoebaCooldownUntil = Date.now() + 30000; return { ok: false, throttled: true, out }; }
+    } catch {
+      // unreachable (timeout, DNS, TLS): back off for two minutes, so a dead
+      // Tatoeba stalls one request per two minutes rather than every one
+      tatoebaCooldownUntil = Date.now() + 120000;
+      return { ok: false, throttled: true, out };
+    }
   };
 
   // prefixed relatives (un-/in-), so the pick can also offer family members
@@ -592,8 +616,8 @@ async function searchSentences(word) {
   const queries = [
     ...searchTerms.slice(0, 2).map(dictQuery),
     ...searchTerms.slice(0, 2).map(wiktQuery),
-    ...searchTerms.slice(0, 1).map(tatoebaQuery),
-    ...prefixTerms.slice(0, 1).map(tatoebaQuery),
+    ...(skipTatoeba ? [] : searchTerms.slice(0, 1).map(tatoebaQuery)),
+    ...(skipTatoeba ? [] : prefixTerms.slice(0, 1).map(tatoebaQuery)),
   ];
   const results = await Promise.all(queries.map((q) => q()));
   let okAny = false, throttled = false;
@@ -604,8 +628,11 @@ async function searchSentences(word) {
   }
   // pick a mix of inflection forms rather than whatever came first
   const picked = pickDiverse(sentences, varRe, word);
-  // never cache an empty result that a throttled source might have filled
-  return { ok: okAny && (picked.length > 0 || !throttled), sentences: picked };
+  // ok: at least one source answered, so an empty pool means "no sentences",
+  // not "no network". incomplete: the pool is empty AND a source was
+  // throttled or unreachable, so the emptiness must not be cached — it may
+  // fill in once that source is back.
+  return { ok: okAny, sentences: picked, incomplete: throttled && picked.length === 0 };
 }
 
 /* ---------- phonetics (Youdao exports often leave the field empty) ---------- */
@@ -733,12 +760,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     const result = await fetchExamples(word);
-    if (result.ok) {
+    if (result.ok && !result.incomplete) {
       exCache[key] = { sentences: result.sentences, ts: Date.now(), v: EX_SCHEMA };
       saveCacheSoon();
     }
     res.writeHead(200, { "Content-Type": MIME[".json"] });
-    res.end(JSON.stringify({ ok: result.ok, cached: false, sentences: result.sentences }));
+    res.end(JSON.stringify({ ok: result.ok, cached: false, sentences: result.sentences, incomplete: !!result.incomplete }));
     return;
   }
 
