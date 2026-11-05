@@ -106,7 +106,11 @@ also triggers the check.)
   default): each word gets a cached picture — a Wikipedia article thumbnail
   when one exists (precise for concrete nouns), else a Creative-Commons photo
   found via Openverse (with attribution), else an AI-generated illustration
-  (Pollinations) so abstract words get one too. In EN→ZH mode the picture
+  (Pollinations) so abstract words get one too. Pollinations' free tier
+  allows one picture every 45 seconds, so an abstract word's picture may
+  take up to a minute to appear while studying, and the **⬇ Cache** bulk
+  download takes only the slots that are free as it passes and leaves the
+  other abstract words for the next run. In EN→ZH mode the picture
   depicts the hidden meaning, so it stays hidden until you reveal; in ZH→EN
   it shows immediately as a memory anchor. Cached like everything else
   (IndexedDB + `image-cache/` in server mode) — fetched once per word, ever.

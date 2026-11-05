@@ -260,7 +260,18 @@ async function fetchOpenAiImage(word, key, model) {
   }
 }
 
-async function fetchAiImage(word) {
+/* Pollinations' free tier (2025+): one image per 45 s per IP, anything
+   faster gets 402 FREE_LIMIT with Retry-After. Requests therefore queue for
+   the next slot; a caller that cannot afford to wait (the bulk download,
+   maxWait 0) gives up at once and the browser retries that word later. */
+let aiNextAt = 0;
+const AI_SPACING = 46000;
+async function fetchAiImage(word, { maxWait = 60000 } = {}) {
+  const now = Date.now();
+  const wait = aiNextAt - now;
+  if (wait > maxWait) return null;
+  aiNextAt = Math.max(now, aiNextAt) + AI_SPACING; // claim the slot before sleeping, so parallel callers line up
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   const def = await definitionOf(word);
   const meaning = def ? def.slice(0, 160) : 'the English word "' + word + '"';
   // rotate art styles so re-rolls look genuinely different, not the same
@@ -273,7 +284,13 @@ async function fetchAiImage(word) {
     meaning + ". single scene, no words, no letters, no captions";
   const r = await fetch("https://image.pollinations.ai/prompt/" + encodeURIComponent(prompt) +
     "?width=640&height=480&nologo=true&seed=" + Math.floor(Math.random() * 1e9), { signal: AbortSignal.timeout(60000) });
+  if (r.status === 402 || r.status === 429) { // over the limit: honour Retry-After
+    const ra = parseInt(r.headers.get("retry-after"), 10);
+    aiNextAt = Date.now() + (Number.isFinite(ra) && ra > 0 ? ra * 1000 + 1000 : AI_SPACING);
+    return null;
+  }
   if (!r.ok) return null;
+  aiNextAt = Date.now() + AI_SPACING; // the limit counts from the served image
   const b = Buffer.from(await r.arrayBuffer());
   if (b.length < 2000 || !(r.headers.get("content-type") || "").startsWith("image/")) return null;
   return { buf: b, ext: extFromContentType(r.headers.get("content-type")), src: "ai",
@@ -907,7 +924,10 @@ const server = http.createServer(async (req, res) => {
       // Wikipedia -> Openverse -> (ChatGPT when configured) -> Pollinations
       const chain = [fetchWikiImage, fetchOpenverseImage];
       if (oaKey) chain.push(async (w) => { try { return await fetchOpenAiImage(w, oaKey, oaModel); } catch (e) { oaError = e.message; return null; } });
-      chain.push(fetchAiImage);
+      // the bulk download must not park a worker for the AI slot: take it
+      // only when it is free now, otherwise leave the word for a later pass
+      const bulk = req.headers["x-bulk"] === "1";
+      chain.push((w) => fetchAiImage(w, { maxWait: bulk ? 0 : 60000 }));
       for (const fn of chain) {
         try { got = await fn(word); } catch { got = null; }
         if (got) break;

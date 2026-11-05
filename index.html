@@ -1671,7 +1671,10 @@ async function fetchImage(word, forceSrc, opts = {}) {
     try {
       // cache: no-store + nonce — the browser HTTP cache must never answer
       // for the app cache, or "another" returns the same picture
-      const headers = paid ? { "x-openai-key": openai.key, "x-openai-model": openai.model } : {};
+      // x-bulk: the server then skips the rate-limited AI illustrator unless a
+      // free slot is available right now, instead of parking a worker for it
+      const headers = paid ? { "x-openai-key": openai.key, "x-openai-model": openai.model }
+        : opts.free ? { "x-bulk": "1" } : {};
       const r = await fetch("api/image?word=" + encodeURIComponent(word) +
         (forceSrc ? "&src=" + forceSrc + "&r=" + Date.now() : ""), { cache: "no-store", headers });
       if (r.status === 502) { // the paid generation failed — say why
