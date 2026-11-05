@@ -69,7 +69,7 @@ also triggers the check.)
   - In `EngRem.bat` mode the server keeps its own disk cache
     (`examples-cache.json`), shared by all browsers; each word hits the public
     APIs at most once, ever.
-  - `EngRem.bat` mode also mirrors your words, position and known-marks to
+  - `EngRem.bat` mode also mirrors your words, position and level marks to
     `state.json` next to the server, and the server re-uses its last port.
     Browsers tie saved data to the exact port, and Windows occasionally forces
     the server onto a new one (its reserved port ranges move after a reboot) —
@@ -88,7 +88,7 @@ also triggers the check.)
   - The **🧹 Clear cache** button deletes all cached examples and audio — both
     the browser's IndexedDB stores and, in server mode, the disk caches
     (`examples-cache.json`, `phonetic-cache.json`, `audio-cache/`). Words,
-    study position, and known-marks are untouched. Use it to force a re-fetch,
+    study position, and level marks are untouched. Use it to force a re-fetch,
     e.g. after the example/pronunciation sources change.
 - **Real pronunciation with caching**: audio comes from Wikimedia Commons and
   the Free Dictionary API where available (real human recordings), with Youdao's
@@ -147,8 +147,12 @@ also triggers the check.)
     toast and the app falls back to the free model. The key is stored only in
     this browser's localStorage and sent only to the local server and
     api.openai.com — never written to any file in this folder.
-- **Shuffle**, **mark as known + skip known words**, and a **searchable word
-  list** for jumping around.
+- **Three levels per word — New → Acquainted → Known** (one level at a time;
+  `G` / `F` on the card, or the picker under it). The header's **Study**
+  picker chooses which levels are in the rotation, so you can go through new
+  words daily, acquainted words weekly and known words monthly. The word list
+  filters by level and shows the counts.
+- **Shuffle** and a **searchable word list** for jumping around.
 
 ## Notes on Youdao's export format (quirks observed in practice)
 
@@ -233,7 +237,8 @@ Important notes for contributors and forks:
 | `←` / `→` | Previous / next word |
 | `M` | Switch EN→ZH / ZH→EN mode |
 | `S` | Toggle shuffle |
-| `F` | Mark / unmark as known |
+| `F` | Mark as known (again: back to new) |
+| `G` | Mark as acquainted (again: back to new) |
 | `P` | Pronounce the word |
 | `A` | Toggle auto-pronounce |
 | `L` | Open the word list |

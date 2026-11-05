@@ -14,6 +14,7 @@
     --accent-soft: #dbeafe;
     --border: #e2e6ec;
     --good: #16a34a;
+    --acq: #d97706;
     --blank: #b45309;
     --shadow: 0 1px 3px rgba(16,24,40,.08), 0 4px 16px rgba(16,24,40,.06);
   }
@@ -27,6 +28,7 @@
       --accent-soft: #1e3a5f;
       --border: #2a3140;
       --good: #4ade80;
+      --acq: #f59e0b;
       --blank: #fbbf24;
       --shadow: 0 1px 3px rgba(0,0,0,.4);
     }
@@ -58,6 +60,10 @@
     padding: .35rem .7rem; cursor: pointer; font-size: .85rem;
   }
   .seg button.active { background: var(--accent); color: #fff; }
+  /* word levels: new (accent) → acquainted (amber) → known (green) */
+  .seg.lvl button.active[data-l="1"] { background: var(--acq); }
+  .seg.lvl button.active[data-l="2"] { background: var(--good); }
+  #studyLbl { color: var(--muted); font-size: .8rem; margin-left: .2rem; }
   button.btn, label.btn {
     border: 1px solid var(--border); background: var(--panel); color: var(--text);
     padding: .35rem .7rem; border-radius: 8px; cursor: pointer; font-size: .85rem;
@@ -136,7 +142,14 @@
     border-radius: 10px; padding: .55rem 1.4rem; font-size: .95rem; cursor: pointer;
   }
   nav#navBar button:hover { border-color: var(--accent); }
-  #famBtn.familiar { color: var(--good); border-color: var(--good); }
+  /* the level picker sits among the nav buttons: match their size, drop their borders */
+  #levelSeg { border-radius: 10px; }
+  #levelSeg button { border: none; border-radius: 0; padding: .55rem 1rem; font-size: .95rem; color: var(--muted); }
+  #levelSeg button:not(.active):hover { background: var(--accent-soft); color: var(--text); }
+  /* nav#navBar button (id selector) outranks .seg button.active — restate the colours */
+  #levelSeg button.active { color: #fff; background: var(--accent); }
+  #levelSeg button.active[data-l="1"] { background: var(--acq); }
+  #levelSeg button.active[data-l="2"] { background: var(--good); }
   /* word list drawer */
   #listPanel {
     width: 270px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
@@ -153,7 +166,7 @@
   #listFilter { margin: 0 .6rem .5rem; display: flex; flex: none; }
   #listFilter button { flex: 1; font-size: .75rem; padding: .25rem .4rem; white-space: nowrap; }
   #listItems { flex: 1; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
-  #listItems li.off { opacity: .55; }                 /* known, hidden by Skip known */
+  #listItems li.off { opacity: .55; }                 /* a level that is not being studied */
   #listItems li.off:hover { opacity: 1; }
   #listEmpty { padding: .8rem; font-size: .8rem; color: var(--muted); text-align: center; }
   #listItems li {
@@ -162,6 +175,7 @@
   #listItems li:hover { background: var(--accent-soft); }
   #listItems li.current { background: var(--accent); color: #fff; }
   #listItems li .fam { color: var(--good); }
+  #listItems li .acq { color: var(--acq); }
   /* import screen */
   #importScreen {
     flex: 1; max-width: 640px; display: flex; flex-direction: column; align-items: stretch;
@@ -232,7 +246,12 @@
     <button id="modeZh" title="Shortcut: M">ZH → EN</button>
   </div>
   <button class="btn" id="shuffleBtn" title="Shortcut: S">🔀 Shuffle</button>
-  <button class="btn" id="hideFamBtn" title="Skip words marked as known">🙈 Skip known</button>
+  <span id="studyLbl">Study</span>
+  <div class="seg lvl" id="studySeg" title="Which levels to study — click a level to include or exclude it (e.g. New daily, Acquainted weekly, Known monthly)">
+    <button data-l="0">New</button>
+    <button data-l="1">Acquainted</button>
+    <button data-l="2">Known</button>
+  </div>
   <div class="spacer"></div>
   <button class="btn" id="autoSpeakBtn" title="Auto-pronounce: speaks each word when you switch to it (EN→ZH) or when you reveal the answer (ZH→EN). Shortcut: A">🔈 Auto</button>
   <button class="btn" id="aiBtn" title="Better pictures with your own OpenAI API key">🤖 ChatGPT</button>
@@ -285,7 +304,7 @@
         <div id="answer" class="hidden"></div>
         <div class="hint">
           <kbd>Space</kbd> hint → answer → hide &nbsp; <kbd>←</kbd><kbd>→</kbd> prev/next &nbsp;
-          <kbd>M</kbd> switch mode &nbsp; <kbd>F</kbd> mark known &nbsp; <kbd>P</kbd> pronounce &nbsp; <kbd>A</kbd> auto-pronounce
+          <kbd>M</kbd> switch mode &nbsp; <kbd>F</kbd> known &nbsp; <kbd>G</kbd> acquainted &nbsp; <kbd>P</kbd> pronounce &nbsp; <kbd>A</kbd> auto-pronounce
         </div>
       </div>
     </div>
@@ -298,7 +317,11 @@
 
     <nav id="navBar">
       <button id="prevBtn" title="←">← Prev</button>
-      <button id="famBtn" title="F">✓ Known</button>
+      <div class="seg lvl" id="levelSeg" title="How well you know this word (F = known, G = acquainted; click the active level to reset to New)">
+        <button data-l="0">New</button>
+        <button data-l="1">Acquainted</button>
+        <button data-l="2">Known</button>
+      </div>
       <button id="speakBtn" title="P">🔊 Speak</button>
       <button id="nextBtn" title="→">Next →</button>
     </nav>
@@ -309,8 +332,9 @@
     <input id="listSearch" type="search" placeholder="Search words…">
     <div class="seg" id="listFilter" title="Which words to list">
       <button data-f="all" class="active">All</button>
+      <button data-f="new">New</button>
+      <button data-f="acq">Acq.</button>
       <button data-f="known">Known</button>
-      <button data-f="unknown">Unknown</button>
     </div>
     <ul id="listItems"></ul>
   </aside>
@@ -354,7 +378,8 @@
 const LS = {
   words: "engrem.words",
   state: "engrem.state",
-  familiar: "engrem.familiar",
+  familiar: "engrem.familiar",       // words marked Known
+  acquainted: "engrem.acquainted",   // words marked Acquainted (never also in familiar)
   exCache: "engrem.examples",
   lastImport: "engrem.lastImport",
   openai: "engrem.openai",
@@ -365,14 +390,28 @@ let order = [];           // indices into words, after filter/shuffle
 let pos = 0;              // position in order
 let mode = "en2zh";       // or "zh2en"
 let shuffled = false;
-let hideFamiliar = false;
-let listFilter = "all";   // List drawer: "all" | "known" | "unknown"
+let studyLevels = [0, 1, 2]; // levels in the study rotation (0 new, 1 acquainted, 2 known)
+let listFilter = "all";   // List drawer: "all" | "new" | "acq" | "known"
 let revealed = false;
 let hintShown = false; // EN->ZH only: picture revealed, translation still hidden
 let autoSpeak = false;
 let showImages = true;
 let openai = { key: "", model: "gpt-image-1", enabled: false }; // optional ChatGPT pictures
-let familiar = new Set();
+let familiar = new Set();   // Known
+let acquainted = new Set(); // Acquainted — a word is in at most one of the two sets
+
+/* Levels: 0 New (never marked) → 1 Acquainted → 2 Known. One level per word. */
+const LEVEL_NAMES = ["new", "acquainted", "known"];
+function levelOf(word) { return familiar.has(word) ? 2 : acquainted.has(word) ? 1 : 0; }
+function setLevel(word, lvl) {
+  if (levelOf(word) === lvl) return false;
+  familiar.delete(word); acquainted.delete(word);
+  if (lvl === 2) familiar.add(word); else if (lvl === 1) acquainted.add(word);
+  saveJSON(LS.familiar, [...familiar]);
+  saveJSON(LS.acquainted, [...acquainted]);
+  return true;
+}
+const studied = (word) => studyLevels.includes(levelOf(word));
 
 function loadJSON(key, fallback) {
   try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
@@ -398,7 +437,7 @@ function saveJSON(key, val) {
    (state.json) and adopted from there whenever this origin has none. The
    OpenAI key is deliberately NOT mirrored: the settings dialog promises it
    never leaves the browser. */
-const SYNC_KEYS = [LS.words, LS.state, LS.familiar, LS.lastImport];
+const SYNC_KEYS = [LS.words, LS.state, LS.familiar, LS.acquainted, LS.lastImport];
 let stateSyncTimer = 0;
 function scheduleStateSync(key) {
   if (!servedMode || !SYNC_KEYS.includes(key)) return;
@@ -872,7 +911,7 @@ function rebuildOrder(resetPos) {
   const curIdx = order[pos];
   order = [];
   for (let i = 0; i < words.length; i++) {
-    if (hideFamiliar && familiar.has(words[i].word)) continue;
+    if (!studied(words[i].word)) continue;
     order.push(i);
   }
   if (shuffled) {
@@ -892,7 +931,7 @@ function rebuildOrder(resetPos) {
 function current() { return order.length ? words[order[pos]] : null; }
 
 function saveState() {
-  saveJSON(LS.state, { pos, mode, shuffled, hideFamiliar, autoSpeak, showImages, listFilter, order });
+  saveJSON(LS.state, { pos, mode, shuffled, studyLevels, autoSpeak, showImages, listFilter, order });
 }
 
 /* ---------------- rendering ---------------- */
@@ -916,9 +955,10 @@ function render() {
   // say plainly when words are held back, so a total that is smaller than the
   // imported wordbook is never a mystery
   const hidden = words.length - order.length;
+  const lvl = levelOf(entry.word);
   $("counter").textContent = (pos + 1) + " / " + order.length +
-    (hidden > 0 ? "　·　" + hidden + (hideFamiliar ? " known hidden" : " hidden") : "") +
-    (familiar.has(entry.word) ? "　·　known" : "");
+    (hidden > 0 ? "　·　" + hidden + " not studied" : "") +
+    (lvl ? "　·　" + LEVEL_NAMES[lvl] : "");
 
   if (mode === "en2zh") {
     wordLine.className = "";
@@ -937,8 +977,7 @@ function render() {
   $("revealBtn").classList.toggle("hidden", revealed);
   $("hintBtn").classList.toggle("hidden", revealed || hintShown || mode !== "en2zh" || !showImages);
   $("revealBtn").textContent = "Show Answer";
-  $("famBtn").classList.toggle("familiar", familiar.has(entry.word));
-  $("famBtn").textContent = familiar.has(entry.word) ? "✓ Known ✔" : "✓ Known";
+  for (const b of $("levelSeg").querySelectorAll("button")) b.classList.toggle("active", +b.dataset.l === lvl);
   renderExamples();
   renderImage();
   updateListHighlight();
@@ -1485,13 +1524,20 @@ function toggleMode() {
   render();
 }
 
-function toggleFamiliar() {
+/* Set the current word's level; picking its current level again resets it to
+   New. A word that leaves the studied levels is dropped from the order in
+   place (no reshuffle), so the card simply moves on to the next word. */
+function toggleLevel(lvl) {
   const entry = current();
   if (!entry) return;
-  if (familiar.has(entry.word)) familiar.delete(entry.word);
-  else familiar.add(entry.word);
-  saveJSON(LS.familiar, [...familiar]);
-  if (hideFamiliar) { rebuildOrder(false); }
+  setLevel(entry.word, levelOf(entry.word) === lvl ? 0 : lvl);
+  if (!studied(entry.word)) {
+    order.splice(pos, 1);
+    pos = Math.min(pos, Math.max(0, order.length - 1));
+    revealed = false; hintShown = false;
+    toast(entry.word + " → " + LEVEL_NAMES[levelOf(entry.word)] + " — skipped until that level is studied again");
+  }
+  saveState();
   render();
 }
 
@@ -2098,26 +2144,29 @@ async function speak() {
 }
 
 /* ---------------- word list drawer ---------------- */
-/* The drawer lists the study order first, then — when Skip known hides
-   them — the known words in wordbook order, dimmed, so "Known" can always
-   show every known word. Clicking a dimmed word turns Skip known off. */
+/* The drawer lists the study order first, then the words whose level is not
+   being studied, in wordbook order and dimmed, so every filter can always
+   show every word of that level. Clicking a dimmed word adds its level to
+   the study set. */
+const LIST_LEVEL = { new: 0, acq: 1, known: 2 };
+const LEVEL_MARK = ["", '<span class="acq">◐</span>', '<span class="fam">✓</span>'];
 function renderList() {
   const ul = $("listItems");
   const q = $("listSearch").value.trim().toLowerCase();
   ul.innerHTML = "";
-  let known = 0;
-  for (const w of words) if (familiar.has(w.word)) known++;
+  const counts = [0, 0, 0];
+  for (const w of words) counts[levelOf(w.word)]++;
   const label = (id, n) => { const b = $("listFilter").querySelector('[data-f="' + id + '"]'); if (b) b.textContent = b.textContent.replace(/\s*\d+$/, "") + " " + n; };
-  label("all", words.length); label("known", known); label("unknown", words.length - known);
+  label("all", words.length); label("new", counts[0]); label("acq", counts[1]); label("known", counts[2]);
   const matches = (w) => !q || w.word.toLowerCase().includes(q) || (w.trans || "").toLowerCase().includes(q);
-  const wanted = (w) => listFilter === "all" || (listFilter === "known") === familiar.has(w.word);
+  const wanted = (w) => listFilter === "all" || LIST_LEVEL[listFilter] === levelOf(w.word);
   const frag = document.createDocumentFragment();
   let shown = 0;
   const add = (w, attrs, cls) => {
     const li = document.createElement("li");
     Object.assign(li.dataset, attrs);
     if (cls) li.className = cls;
-    li.innerHTML = "<span>" + esc(w.word) + "</span>" + (familiar.has(w.word) ? '<span class="fam">✓</span>' : "");
+    li.innerHTML = "<span>" + esc(w.word) + "</span>" + LEVEL_MARK[levelOf(w.word)];
     frag.appendChild(li);
     shown++;
   };
@@ -2126,17 +2175,19 @@ function renderList() {
     const w = words[wi];
     if (wanted(w) && matches(w)) add(w, { oi }, oi === pos ? "current" : "");
   });
-  if (hideFamiliar && listFilter !== "unknown") {
+  if (studyLevels.length < 3) {
     words.forEach((w, wi) => {
-      if (inOrder.has(wi) || !familiar.has(w.word)) return;
-      if (matches(w)) add(w, { wi }, "off");
+      if (inOrder.has(wi) || studied(w.word)) return;
+      if (wanted(w) && matches(w)) add(w, { wi }, "off");
     });
   }
   ul.appendChild(frag);
   if (!shown) {
     const p = document.createElement("div");
     p.id = "listEmpty";
-    p.textContent = q ? "No matching words" : listFilter === "known" ? "No words marked as known yet" : "No words";
+    p.textContent = q ? "No matching words" :
+      listFilter === "known" ? "No words marked as known yet" :
+      listFilter === "acq" ? "No words marked as acquainted yet" : "No words";
     ul.appendChild(p);
   }
 }
@@ -2192,7 +2243,10 @@ $("revealBtn").addEventListener("click", () => setRevealed(true));
 $("hintBtn").addEventListener("click", setHint);
 $("prevBtn").addEventListener("click", () => go(-1));
 $("nextBtn").addEventListener("click", () => go(1));
-$("famBtn").addEventListener("click", toggleFamiliar);
+$("levelSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (b) toggleLevel(+b.dataset.l);
+});
 $("speakBtn").addEventListener("click", speak);
 $("modeEn").addEventListener("click", () => { if (mode !== "en2zh") toggleMode(); });
 $("modeZh").addEventListener("click", () => { if (mode !== "zh2en") toggleMode(); });
@@ -2262,9 +2316,20 @@ $("imgBtn").addEventListener("click", () => {
   saveState();
   renderImage();
 });
-$("hideFamBtn").addEventListener("click", () => {
-  hideFamiliar = !hideFamiliar;
-  $("hideFamBtn").classList.toggle("toggled", hideFamiliar);
+function drawStudySeg() {
+  for (const b of $("studySeg").querySelectorAll("button")) b.classList.toggle("active", studyLevels.includes(+b.dataset.l));
+}
+$("studySeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  const lvl = +b.dataset.l;
+  if (studyLevels.includes(lvl)) {
+    if (studyLevels.length === 1) { toast("At least one level must stay in the study set"); return; }
+    studyLevels = studyLevels.filter((l) => l !== lvl);
+  } else {
+    studyLevels = [...studyLevels, lvl].sort();
+  }
+  drawStudySeg();
   rebuildOrder(false);
   revealed = false; hintShown = false;
   render();
@@ -2321,7 +2386,7 @@ $("cacheAllBtn").addEventListener("click", async () => {
 
 $("clearCacheBtn").addEventListener("click", async () => {
   if (bulkRunning) { toast("Pause the bulk download first"); return; }
-  if (!confirm("Clear all cached examples and pronunciation audio?\nWords, study position and known-marks are kept.")) return;
+  if (!confirm("Clear all cached examples and pronunciation audio?\nWords, study position and known/acquainted marks are kept.")) return;
   exMem.clear(); exInflight.clear(); audioMem.clear(); audioInflight.clear();
   imgMem.clear(); imgInflight.clear();
   try { await idb.clearStore("ex"); } catch {}
@@ -2354,12 +2419,13 @@ $("listItems").addEventListener("click", (e) => {
   if (li.dataset.oi !== undefined) {
     pos = +li.dataset.oi;
   } else {
-    // a known word that Skip known hides: show it anyway, so turn that off
-    hideFamiliar = false;
-    $("hideFamBtn").classList.toggle("toggled", false);
+    // a word whose level is not being studied: add that level to the study set
+    const lvl = levelOf(words[+li.dataset.wi].word);
+    studyLevels = [...studyLevels, lvl].sort();
+    drawStudySeg();
     rebuildOrder(false);
     pos = Math.max(0, order.indexOf(+li.dataset.wi));
-    toast("Skip known turned off to show this word");
+    toast(LEVEL_NAMES[lvl][0].toUpperCase() + LEVEL_NAMES[lvl].slice(1) + " words added to the study set to show this word");
   }
   revealed = false; hintShown = false;
   saveState();
@@ -2381,7 +2447,8 @@ document.addEventListener("keydown", (e) => {
     case "ArrowLeft": e.preventDefault(); go(-1); break;
     case "m": case "M": toggleMode(); break;
     case "s": case "S": $("shuffleBtn").click(); break;
-    case "f": case "F": toggleFamiliar(); break;
+    case "f": case "F": toggleLevel(2); break;
+    case "g": case "G": toggleLevel(1); break;
     case "p": case "P": speak(); break;
     case "a": case "A": $("autoSpeakBtn").click(); break;
     case "i": case "I": $("imgBtn").click(); break;
@@ -2403,6 +2470,7 @@ function toast(msg) {
   await adoptServerState(); // before the first read: a moved port must not look like a fresh start
   words = loadJSON(LS.words, []);
   familiar = new Set(loadJSON(LS.familiar, []));
+  acquainted = new Set(loadJSON(LS.acquainted, []));
   // migrate data imported before word-case normalization existed
   let caseFixed = false;
   for (const w of words) {
@@ -2414,6 +2482,12 @@ function toast(msg) {
   if (famFixed.size !== familiar.size || [...famFixed].some((w) => !familiar.has(w))) {
     familiar = famFixed;
     saveJSON(LS.familiar, [...familiar]);
+  }
+  // one level per word: Known wins if a word ever ended up in both sets
+  const acqFixed = new Set([...acquainted].map(normalizeWordCase).filter((w) => !familiar.has(w)));
+  if (acqFixed.size !== acquainted.size || [...acqFixed].some((w) => !acquainted.has(w))) {
+    acquainted = acqFixed;
+    saveJSON(LS.acquainted, [...acquainted]);
   }
   // one-time migration of the old localStorage example cache into IndexedDB
   const legacyEx = loadJSON(LS.exCache, null);
@@ -2429,16 +2503,19 @@ function toast(msg) {
   if (st) {
     mode = st.mode || "en2zh";
     shuffled = !!st.shuffled;
-    hideFamiliar = !!st.hideFamiliar;
+    if (Array.isArray(st.studyLevels)) studyLevels = st.studyLevels.filter((l) => [0, 1, 2].includes(l)).sort();
+    else if (st.hideFamiliar) studyLevels = [0, 1]; // from before the Acquainted level existed: "Skip known"
+    if (!studyLevels.length) studyLevels = [0, 1, 2];
     autoSpeak = !!st.autoSpeak;
     showImages = st.showImages !== false;
-    if (["all", "known", "unknown"].includes(st.listFilter)) listFilter = st.listFilter;
+    if (st.listFilter === "unknown") st.listFilter = "new"; // old name of the filter
+    if (["all", "new", "acq", "known"].includes(st.listFilter)) listFilter = st.listFilter;
   }
   for (const b of $("listFilter").querySelectorAll("button")) b.classList.toggle("active", b.dataset.f === listFilter);
+  drawStudySeg();
   $("modeEn").classList.toggle("active", mode === "en2zh");
   $("modeZh").classList.toggle("active", mode === "zh2en");
   $("shuffleBtn").classList.toggle("toggled", shuffled);
-  $("hideFamBtn").classList.toggle("toggled", hideFamiliar);
   $("autoSpeakBtn").classList.toggle("toggled", autoSpeak);
   $("imgBtn").classList.toggle("toggled", showImages);
   // the ChatGPT settings used to be read only inside button handlers, so a
@@ -2453,7 +2530,7 @@ function toast(msg) {
       // Rebuild whenever the saved order no longer covers the wordbook. With
       // shuffle on it used to be reused verbatim, so words added by a later
       // export sat at indices past its end and never entered the rotation.
-      const expected = words.reduce((n, w) => n + (hideFamiliar && familiar.has(w.word) ? 0 : 1), 0);
+      const expected = words.reduce((n, w) => n + (studied(w.word) ? 1 : 0), 0);
       if (!shuffled || order.length !== expected) rebuildOrder(false);
     } else {
       rebuildOrder(true);
