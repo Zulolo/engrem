@@ -161,10 +161,19 @@ async function fetchOpenverseImage(word, loose) {
   const at = Math.max(now, openverseNextAt);
   openverseNextAt = at + 600;
   if (at > now) await new Promise((r) => setTimeout(r, at - now));
-  const r = await fetch("https://api.openverse.org/v1/images/?q=" + encodeURIComponent(word) +
-    "&page_size=8&license_type=commercial,modification",
-    { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) });
+  let r;
+  try {
+    r = await fetch("https://api.openverse.org/v1/images/?q=" + encodeURIComponent(word) +
+      "&page_size=8&license_type=commercial,modification",
+      { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) });
+  } catch {
+    // unreachable or timing out: back off two minutes, so an Openverse outage
+    // costs one 8 s wait per two minutes instead of 8 s on every picture
+    openverseCooldownUntil = Date.now() + 120000;
+    return null;
+  }
   if (r.status === 429) { openverseCooldownUntil = Date.now() + 60000; return null; }
+  if (r.status >= 500) { openverseCooldownUntil = Date.now() + 120000; return null; } // outage
   if (!r.ok) return null;
   const d = await r.json();
   // tag search is loose ("wilt" -> a "Wilts & Dorset" bus): require the word

@@ -1615,6 +1615,7 @@ function showPhonetic(entry) {
 /* ---------------- memory-aid pictures (cached, chained sources) ---------------- */
 const IMG_AI_V = 2; // bump when the AI prompt improves: old entries regenerate
 const imgMem = new Map();      // word -> {blob, src, attr} | "none"
+let openverseCooldownUntil = 0; // offline mode: skip Openverse for a while after an outage
 const imgInflight = new Map(); // word -> Promise
 let imgToken = 0;
 let imgObjUrl = null;
@@ -1752,8 +1753,13 @@ const IMG_FETCHERS = {
     return blob.size > 500 ? { blob, src: "wiki", attr: "Wikipedia — " + (d.title || word) } : null;
   },
   openverse: async (word, loose) => {
-    const r = await fetch("https://api.openverse.org/v1/images/?q=" + encodeURIComponent(word) +
-      "&page_size=8&license_type=commercial,modification");
+    if (Date.now() < openverseCooldownUntil) return null;
+    let r;
+    try {
+      r = await fetch("https://api.openverse.org/v1/images/?q=" + encodeURIComponent(word) +
+        "&page_size=8&license_type=commercial,modification", { signal: AbortSignal.timeout(8000) });
+    } catch { openverseCooldownUntil = Date.now() + 120000; return null; } // unreachable: back off
+    if (r.status === 429 || r.status >= 500) { openverseCooldownUntil = Date.now() + 120000; return null; }
     if (!r.ok) return null;
     const d = await r.json();
     // tag search is loose: require the word in the result title or tags
