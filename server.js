@@ -37,7 +37,7 @@ const MIME = {
 /* ---------- example cache (disk-backed) ---------- */
 /* EX_SCHEMA versions the fetch logic: bump it when search/filter quality
    improves and every stale entry (including cached empties) refetches. */
-const EX_SCHEMA = 5;
+const EX_SCHEMA = 6; // 6: Youdao bilingual sentences
 let exCache = {};
 try { exCache = JSON.parse(fs.readFileSync(CACHE_FILE, "utf-8")); } catch {}
 let cacheDirty = false;
@@ -525,6 +525,34 @@ function pickDiverse(sentences, varRe, word) {
    it simply stops answering). Space out request starts globally and back off
    after a 429/timeout — without this a bulk cache run gets throttled, and then
    every word waits out a timeout AND returns fewer sentences. */
+/* Youdao (dict.youdao.com/jsonapi_s, the unofficial endpoint Youdao's own
+   dictionary page calls). Anonymous: no account or login is involved. It
+   rejects cross-origin requests, so only the local server can use it. The
+   plain parts used are bilingual sentence pairs (often credited to Oxford or
+   Collins), Collins examples and English "authority" sentences; its Oxford
+   sections are encrypted licensed content and are deliberately left alone.
+   One request per word, spaced out, cached forever. Returns null when
+   Youdao is unavailable, after which it is left alone for two minutes. */
+let youdaoNextAt = 0, youdaoCooldownUntil = 0;
+async function youdaoFetch(word) {
+  if (Date.now() < youdaoCooldownUntil) return null;
+  const now = Date.now();
+  const at = Math.max(now, youdaoNextAt);
+  youdaoNextAt = at + 250;
+  if (at > now) await new Promise((r) => setTimeout(r, at - now));
+  try {
+    const r = await fetch("https://dict.youdao.com/jsonapi_s?doctype=json&jsonversion=4&le=en&q=" + encodeURIComponent(word),
+      { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (!j || typeof j !== "object" || j.code) throw new Error("error answer"); // {"code":40,"message":...}
+    return j;
+  } catch {
+    youdaoCooldownUntil = Date.now() + 120000;
+    return null;
+  }
+}
+
 let tatoebaNextAt = 0, tatoebaCooldownUntil = 0;
 async function tatoebaGate() {
   const now = Date.now();
@@ -550,14 +578,19 @@ async function searchSentences(word, { skipTatoeba = false } = {}) {
   // otherwise wrong-word results from one source (e.g. dict's "wilt" -> "will"
   // entry) crowd out the sources that have the real sentences
   const varRe = wordVariantsRegex(word);
-  const push = (s, src) => {
+  // extra: optional { zh, via } — a Chinese translation and the dictionary
+  // or publication a sentence comes from (Youdao sentences carry both)
+  const push = (s, src, extra) => {
     s = String(s).replace(/\s+/g, " ").trim();
     if (!s || s.length < 8 || s.length > 220) return;
     if (varRe) { varRe.lastIndex = 0; if (!varRe.test(s)) return; }
     const k = exKey(s);
     if (seen.has(k)) return;
     seen.add(k);
-    sentences.push({ text: s, src });
+    const o = { text: s, src };
+    if (extra && extra.zh) o.zh = extra.zh;
+    if (extra && extra.via) o.via = extra.via;
+    sentences.push(o);
   };
   const stripHtml = (h) => String(h).replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
   const TIMEOUT = 8000; // one slow source no longer delays the others
@@ -636,10 +669,52 @@ async function searchSentences(word, { skipTatoeba = false } = {}) {
     if (!prefixTerms.length && w0.length >= 4 && ADJ_LIKE.test(w0)) prefixTerms.push("in" + w0, "un" + w0);
   }
 
-  // query order is merge order: dictionary, then Wiktionary, then Tatoeba
-  // Tatoeba search is already stemmed, so ONE query covers the inflections;
-  // extra terms only spent rate-limit budget for near-duplicate results
+  // Youdao: `out` holds the sentences it credits to a dictionary (Oxford,
+  // Collins, ...) with their Chinese translations; `late` holds its
+  // uncredited web-mined pairs (noisy: "decease blood pressure" is a typo
+  // for "decrease") and English news sentences, merged after every other
+  // source. One query: Youdao has its own entries for inflected forms.
+  const viaOf = (src) => {
+    const t = stripHtml(src || "");
+    if (/牛津/.test(t)) return "Oxford";
+    if (/柯林斯/.test(t)) return "Collins";
+    if (/剑桥/.test(t)) return "Cambridge";
+    if (/朗文/.test(t)) return "Longman";
+    if (/韦氏/.test(t)) return "Webster";
+    return "";
+  };
+  const youdaoQuery = (term) => async () => {
+    const out = [], late = [];
+    const j = await youdaoFetch(term);
+    if (!j) return { ok: false, throttled: true, out, late };
+    for (const p of (j.blng_sents_part && j.blng_sents_part["sentence-pair"]) || []) {
+      const en = p.sentence || stripHtml(p["sentence-eng"] || "");
+      const via = viaOf(p.source);
+      (via ? out : late).push([en, "youdao", { zh: stripHtml(p["sentence-translation"] || ""), via }]);
+    }
+    for (const e of (j.collins && j.collins.collins_entries) || []) {
+      for (const en of (e.entries && e.entries.entry) || []) {
+        for (const t of en.tran_entry || []) {
+          for (const s of (t.exam_sents && t.exam_sents.sent) || []) {
+            out.push([stripHtml(s.eng_sent || ""), "youdao", { zh: stripHtml(s.chn_sent || ""), via: "Collins" }]);
+          }
+        }
+      }
+    }
+    for (const s of (j.auth_sents_part && j.auth_sents_part.sent) || []) {
+      let via = stripHtml(s.source || "").split(":")[0].trim(); // "FORBES: <i>Gift Horse</i>"
+      if (/^[A-Z]{4,}$/.test(via)) via = via[0] + via.slice(1).toLowerCase(); // FORBES -> Forbes, BBC stays
+      late.push([stripHtml(s.foreign || ""), "youdao", { via }]);
+    }
+    return { ok: true, out, late };
+  };
+
+  // query order is merge order: Youdao's dictionary sentences, dictionary,
+  // Wiktionary, Tatoeba, then Youdao's late ones. Tatoeba search is already
+  // stemmed, so ONE query covers the inflections; extra terms only spent
+  // rate-limit budget for near-duplicate results
   const queries = [
+    ...searchTerms.slice(0, 1).map(youdaoQuery),
     ...searchTerms.slice(0, 2).map(dictQuery),
     ...searchTerms.slice(0, 2).map(wiktQuery),
     ...(skipTatoeba ? [] : searchTerms.slice(0, 1).map(tatoebaQuery)),
@@ -650,8 +725,9 @@ async function searchSentences(word, { skipTatoeba = false } = {}) {
   for (const r of results) {
     if (r.ok) okAny = true;
     if (r.throttled) throttled = true;
-    for (const [text, src] of r.out) push(text, src);
+    for (const [text, src, extra] of r.out) push(text, src, extra);
   }
+  for (const r of results) for (const [text, src, extra] of r.late || []) push(text, src, extra);
   // pick a mix of inflection forms rather than whatever came first
   const picked = pickDiverse(sentences, varRe, word);
   // ok: at least one source answered, so an empty pool means "no sentences",

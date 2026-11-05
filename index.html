@@ -122,6 +122,7 @@
   #exList { margin: 0; padding-left: 1.2rem; }
   #exList li { margin: .45rem 0; line-height: 1.55; font-size: 1rem; }
   #exList .src { color: var(--muted); font-size: .75rem; margin-left: .4rem; }
+  #exList .ex-zh { color: var(--muted); font-size: .9rem; line-height: 1.45; }
   .w-blank { color: var(--blank); font-weight: 600; letter-spacing: .05em; }
   .w-hit { color: var(--accent); font-weight: 650; }
   #exStatus { color: var(--muted); font-size: .9rem; }
@@ -343,7 +344,7 @@
     </div>
   </div>
 </div>
-<footer>Data stays in your browser (localStorage). Examples: Free Dictionary API / Tatoeba.</footer>
+<footer>Data stays in your browser (localStorage). Examples: Youdao / Free Dictionary API / Wiktionary / Tatoeba.</footer>
 <div id="toast"></div>
 
 <script>
@@ -972,7 +973,7 @@ let exToken = 0; // guards against out-of-order async responses
    null means "never fetched successfully"; an empty array is a valid cached result.
    EX_SCHEMA versions the fetch logic: bump it when search/filter quality improves
    and every stale entry (including cached empties) transparently refetches. */
-const EX_SCHEMA = 5;
+const EX_SCHEMA = 6; // 6: Youdao bilingual sentences (server mode)
 const exMem = new Map();      // word -> sentences
 const exInflight = new Map(); // word -> Promise<sentences|null>
 
@@ -1432,15 +1433,20 @@ async function renderExamples() {
       ? "(no direct examples — showing a related word form)" : "";
     for (const s of sents) {
       const li = document.createElement("li");
-      const srcName = s.src === "tatoeba" ? "Tatoeba" : s.src === "wikt" ? "Wiktionary" : "";
+      const srcName = s.src === "tatoeba" ? "Tatoeba" : s.src === "wikt" ? "Wiktionary"
+        : s.src === "youdao" ? (s.via ? s.via + " · Youdao" : "Youdao") : "";
       let label = srcName;
       if (s.rel) {
         // don't name the related form while the answer is still hidden
         const relText = (mode === "zh2en" && !revealed) ? "related form" : "≈ " + s.rel;
         label = relText + (srcName ? " · " + srcName : "");
       }
+      // the Chinese translation gives the meaning away, so in EN→ZH it waits
+      // for the reveal; in ZH→EN the meaning is the prompt anyway
+      const showZh = s.zh && (mode === "zh2en" || revealed);
       li.innerHTML = decorateSentence(s.text, word, s.rel) +
-        (label ? '<span class="src">' + esc(label) + "</span>" : "");
+        (label ? '<span class="src">' + esc(label) + "</span>" : "") +
+        (showZh ? '<div class="ex-zh">' + esc(s.zh) + "</div>" : "");
       list.appendChild(li);
     }
   };

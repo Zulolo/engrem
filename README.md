@@ -185,6 +185,13 @@ cached locally on your machine:
   [Free Dictionary API](https://dictionaryapi.dev), and the
   [Wiktionary REST API](https://en.wiktionary.org/api/rest_v1/) — the latter
   two serve [Wiktionary](https://www.wiktionary.org) content (CC BY-SA).
+  In server mode also [Youdao](https://dict.youdao.com): bilingual example
+  sentences with Chinese translations, many credited to Oxford or Collins
+  dictionaries, shown first and labelled with their dictionary. This uses
+  the unofficial endpoint Youdao's own web page calls, anonymously (no
+  account or login), once per word; it may change or stop working at any
+  time. In EN→ZH mode the translations appear only after you reveal the
+  answer.
 - **Phonetics** (for entries whose export lacks one): the
   [Wiktionary API](https://en.wiktionary.org/w/api.php) (CC BY-SA), then the
   [Free Dictionary API](https://dictionaryapi.dev).
