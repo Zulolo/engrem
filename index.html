@@ -954,11 +954,11 @@ function render() {
   }
   // say plainly when words are held back, so a total that is smaller than the
   // imported wordbook is never a mystery
+  // the word's own level is shown by the picker under the card, not here
   const hidden = words.length - order.length;
   const lvl = levelOf(entry.word);
   $("counter").textContent = (pos + 1) + " / " + order.length +
-    (hidden > 0 ? "　·　" + hidden + " not studied" : "") +
-    (lvl ? "　·　" + LEVEL_NAMES[lvl] : "");
+    (hidden > 0 ? "　·　" + hidden + " more skipped by the Study filter" : "");
 
   if (mode === "en2zh") {
     wordLine.className = "";
