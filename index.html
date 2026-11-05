@@ -147,7 +147,12 @@
     margin: .6rem; padding: .4rem .6rem; border: 1px solid var(--border); border-radius: 8px;
     background: var(--bg); color: var(--text); font-size: .85rem;
   }
+  #listFilter { margin: 0 .6rem .5rem; display: flex; }
+  #listFilter button { flex: 1; font-size: .75rem; padding: .25rem .4rem; white-space: nowrap; }
   #listItems { flex: 1; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+  #listItems li.off { opacity: .55; }                 /* known, hidden by Skip known */
+  #listItems li.off:hover { opacity: 1; }
+  #listEmpty { padding: .8rem; font-size: .8rem; color: var(--muted); text-align: center; }
   #listItems li {
     padding: .35rem .8rem; cursor: pointer; font-size: .85rem; display: flex; justify-content: space-between; gap: .5rem;
   }
@@ -299,6 +304,11 @@
   <!-- word list drawer -->
   <aside id="listPanel">
     <input id="listSearch" type="search" placeholder="Search words…">
+    <div class="seg" id="listFilter" title="Which words to list">
+      <button data-f="all" class="active">All</button>
+      <button data-f="known">Known</button>
+      <button data-f="unknown">Unknown</button>
+    </div>
     <ul id="listItems"></ul>
   </aside>
 </main>
@@ -353,6 +363,7 @@ let pos = 0;              // position in order
 let mode = "en2zh";       // or "zh2en"
 let shuffled = false;
 let hideFamiliar = false;
+let listFilter = "all";   // List drawer: "all" | "known" | "unknown"
 let revealed = false;
 let hintShown = false; // EN->ZH only: picture revealed, translation still hidden
 let autoSpeak = false;
@@ -878,7 +889,7 @@ function rebuildOrder(resetPos) {
 function current() { return order.length ? words[order[pos]] : null; }
 
 function saveState() {
-  saveJSON(LS.state, { pos, mode, shuffled, hideFamiliar, autoSpeak, showImages, order });
+  saveJSON(LS.state, { pos, mode, shuffled, hideFamiliar, autoSpeak, showImages, listFilter, order });
 }
 
 /* ---------------- rendering ---------------- */
@@ -2070,21 +2081,47 @@ async function speak() {
 }
 
 /* ---------------- word list drawer ---------------- */
+/* The drawer lists the study order first, then — when Skip known hides
+   them — the known words in wordbook order, dimmed, so "Known" can always
+   show every known word. Clicking a dimmed word turns Skip known off. */
 function renderList() {
   const ul = $("listItems");
   const q = $("listSearch").value.trim().toLowerCase();
   ul.innerHTML = "";
+  let known = 0;
+  for (const w of words) if (familiar.has(w.word)) known++;
+  const label = (id, n) => { const b = $("listFilter").querySelector('[data-f="' + id + '"]'); if (b) b.textContent = b.textContent.replace(/\s*\d+$/, "") + " " + n; };
+  label("all", words.length); label("known", known); label("unknown", words.length - known);
+  const matches = (w) => !q || w.word.toLowerCase().includes(q) || (w.trans || "").toLowerCase().includes(q);
+  const wanted = (w) => listFilter === "all" || (listFilter === "known") === familiar.has(w.word);
   const frag = document.createDocumentFragment();
-  order.forEach((wi, oi) => {
-    const w = words[wi];
-    if (q && !w.word.toLowerCase().includes(q) && !(w.trans || "").toLowerCase().includes(q)) return;
+  let shown = 0;
+  const add = (w, attrs, cls) => {
     const li = document.createElement("li");
-    li.dataset.oi = oi;
-    if (oi === pos) li.className = "current";
+    Object.assign(li.dataset, attrs);
+    if (cls) li.className = cls;
     li.innerHTML = "<span>" + esc(w.word) + "</span>" + (familiar.has(w.word) ? '<span class="fam">✓</span>' : "");
     frag.appendChild(li);
+    shown++;
+  };
+  const inOrder = new Set(order);
+  order.forEach((wi, oi) => {
+    const w = words[wi];
+    if (wanted(w) && matches(w)) add(w, { oi }, oi === pos ? "current" : "");
   });
+  if (hideFamiliar && listFilter !== "unknown") {
+    words.forEach((w, wi) => {
+      if (inOrder.has(wi) || !familiar.has(w.word)) return;
+      if (matches(w)) add(w, { wi }, "off");
+    });
+  }
   ul.appendChild(frag);
+  if (!shown) {
+    const p = document.createElement("div");
+    p.id = "listEmpty";
+    p.textContent = q ? "No matching words" : listFilter === "known" ? "No words marked as known yet" : "No words";
+    ul.appendChild(p);
+  }
 }
 function updateListHighlight() {
   if (!$("listPanel").classList.contains("open")) return;
@@ -2286,10 +2323,27 @@ $("listBtn").addEventListener("click", () => {
   if (p.classList.contains("open")) renderList();
 });
 $("listSearch").addEventListener("input", renderList);
+$("listFilter").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-f]");
+  if (!b) return;
+  listFilter = b.dataset.f;
+  for (const x of $("listFilter").querySelectorAll("button")) x.classList.toggle("active", x === b);
+  saveState();
+  renderList();
+});
 $("listItems").addEventListener("click", (e) => {
   const li = e.target.closest("li");
   if (!li) return;
-  pos = +li.dataset.oi;
+  if (li.dataset.oi !== undefined) {
+    pos = +li.dataset.oi;
+  } else {
+    // a known word that Skip known hides: show it anyway, so turn that off
+    hideFamiliar = false;
+    $("hideFamBtn").classList.toggle("toggled", false);
+    rebuildOrder(false);
+    pos = Math.max(0, order.indexOf(+li.dataset.wi));
+    toast("Skip known turned off to show this word");
+  }
   revealed = false; hintShown = false;
   saveState();
   render();
@@ -2361,7 +2415,9 @@ function toast(msg) {
     hideFamiliar = !!st.hideFamiliar;
     autoSpeak = !!st.autoSpeak;
     showImages = st.showImages !== false;
+    if (["all", "known", "unknown"].includes(st.listFilter)) listFilter = st.listFilter;
   }
+  for (const b of $("listFilter").querySelectorAll("button")) b.classList.toggle("active", b.dataset.f === listFilter);
   $("modeEn").classList.toggle("active", mode === "en2zh");
   $("modeZh").classList.toggle("active", mode === "zh2en");
   $("shuffleBtn").classList.toggle("toggled", shuffled);
