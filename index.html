@@ -147,7 +147,9 @@
     margin: .6rem; padding: .4rem .6rem; border: 1px solid var(--border); border-radius: 8px;
     background: var(--bg); color: var(--text); font-size: .85rem;
   }
-  #listFilter { margin: 0 .6rem .5rem; display: flex; }
+  /* flex: none — .seg clips overflow, so without it the row shrinks to a
+     line once the long word list fills the panel */
+  #listFilter { margin: 0 .6rem .5rem; display: flex; flex: none; }
   #listFilter button { flex: 1; font-size: .75rem; padding: .25rem .4rem; white-space: nowrap; }
   #listItems { flex: 1; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
   #listItems li.off { opacity: .55; }                 /* known, hidden by Skip known */
