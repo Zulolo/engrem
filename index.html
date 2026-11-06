@@ -260,6 +260,7 @@
   <button class="btn" id="clearCacheBtn" title="Delete all cached examples and pronunciation audio (words and study progress are kept)">🧹 Clear cache</button>
   <button class="btn" id="listBtn" title="Shortcut: L">📋 List</button>
   <button class="btn" id="importBtn" title="Import a wordbook">📂 Import</button>
+  <a class="btn hidden" id="accountBtn" href="account" style="text-decoration:none" title="Password and signed-in devices">🔒</a>
   <input type="file" id="fileInput" accept=".xml,text/xml" class="hidden">
   <input type="file" id="dirInput" webkitdirectory class="hidden">
 </header>
@@ -281,7 +282,7 @@
 
     <div id="dropZone" tabindex="0">
       <strong>…or drop a file here</strong>
-      Drag an exported <code>.xml</code> wordbook onto this page, or click to browse for a single file
+      <span id="dropNote">Drag an exported <code>.xml</code> wordbook onto this page, or click to browse for a single file</span>
     </div>
 
     <div id="importStatus"></div>
@@ -383,6 +384,7 @@ const LS = {
   exCache: "engrem.examples",
   lastImport: "engrem.lastImport",
   openai: "engrem.openai",
+  syncTs: "engrem.syncTs",           // server stamp of the last state this device sent or adopted
 };
 
 let words = [];           // [{word, trans, phonetic, tags, progress}]
@@ -443,24 +445,56 @@ function scheduleStateSync(key) {
   if (!servedMode || !SYNC_KEYS.includes(key)) return;
   clearTimeout(stateSyncTimer);
   stateSyncTimer = setTimeout(() => {
+    stateSyncTimer = 0;
     const body = {};
     for (const k of SYNC_KEYS) {
       const v = loadJSON(k, undefined);
       if (v !== undefined) body[k] = v;
     }
     fetch("api/state", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => { if (d && d.ts) localStorage.setItem(LS.syncTs, String(d.ts)); })
       .catch(() => {}); // older server without the endpoint — localStorage still has everything
   }, 1500);
 }
+/* Several devices share the server copy: whichever device wrote last wins,
+   and a device adopts the server copy whenever it is newer than what it last
+   sent or adopted itself (or when this origin has no data at all — a moved
+   port, a fresh browser). */
 async function adoptServerState() {
-  if (!servedMode || loadJSON(LS.words, []).length) return; // this origin already has data
+  if (!servedMode) return false;
+  const mine = +(localStorage.getItem(LS.syncTs) || 0);
+  const fresh = !loadJSON(LS.words, []).length;
   try {
     const r = await fetch("api/state", { cache: "no-store", signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return false;
+    const d = await r.json();
+    if (!d || (!fresh && !(d._ts > mine))) return false;
+    let got = false;
+    for (const k of SYNC_KEYS) if (d[k] !== undefined) { saveJSON(k, d[k]); got = true; }
+    if (got) {
+      clearTimeout(stateSyncTimer); stateSyncTimer = 0; // saveJSON scheduled a push of what we just pulled
+      localStorage.setItem(LS.syncTs, String(d._ts || 0));
+      toast(fresh ? "Progress restored from the server" : "Progress updated from another device");
+    }
+    return got;
+  } catch { return false; }
+}
+/* Coming back to a tab or app: did another device move on meanwhile? A cheap
+   poll of the server stamp, and a reload when it is newer (the in-memory
+   state is rebuilt from localStorage on load). */
+let lastPullCheck = 0;
+async function pullIfNewer() {
+  if (!servedMode || document.hidden || Date.now() - lastPullCheck < 5000) return;
+  if (stateSyncTimer) return; // our own change is about to be pushed — ours wins
+  lastPullCheck = Date.now();
+  try {
+    const r = await fetch("api/state?meta=1", { cache: "no-store", signal: AbortSignal.timeout(4000) });
     if (!r.ok) return;
     const d = await r.json();
-    let got = false;
-    for (const k of SYNC_KEYS) if (d && d[k] !== undefined) { saveJSON(k, d[k]); got = true; }
-    if (got) toast("Progress restored — the app moved to a new port, your data came along");
+    if (d.ts > +(localStorage.getItem(LS.syncTs) || 0)) {
+      if (await adoptServerState()) setTimeout(() => location.reload(), 600);
+    }
   } catch {}
 }
 
@@ -577,7 +611,22 @@ function importFile(file) {
   const status = document.getElementById("importStatus");
   status.textContent = "Reading " + file.name + " …";
   const reader = new FileReader();
-  reader.onload = () => importText(reader.result, file.name, { size: file.size, mtime: file.lastModified });
+  reader.onload = async () => {
+    let meta = { size: file.size, mtime: file.lastModified };
+    // served mode: the file also goes to the server's data folder, so the
+    // list shows it, every device gets it, and the server's own size/mtime
+    // become the reference for the "re-exported?" check on every device
+    if (servedMode && looksLikeYoudao(reader.result)) {
+      status.textContent = "Uploading " + file.name + " …";
+      try {
+        const r = await fetch("api/upload", { method: "POST", body: reader.result,
+          headers: { "Content-Type": "application/xml", "x-file-name": encodeURIComponent(file.name) } });
+        if (r.ok) { const d = await r.json(); meta = { size: d.size, mtime: d.mtime }; }
+        else if (r.status !== 404) { const d = await r.json().catch(() => ({})); toast("Not stored on the server: " + (d.error || "HTTP " + r.status)); }
+      } catch {} // older server without the endpoint — import locally as before
+    }
+    importText(reader.result, file.name, meta);
+  };
   reader.onerror = () => { status.textContent = "Could not read " + file.name; };
   reader.readAsText(file, "utf-8");
 }
@@ -2466,6 +2515,24 @@ function toast(msg) {
 }
 
 /* ---------------- init ---------------- */
+/* Hosted mode: a server answer of 401 means this device is no longer signed
+   in (cookie gone, or evicted by a sixth device) — go to the login page
+   instead of failing quietly on every request. */
+if (servedMode) {
+  const realFetch = window.fetch.bind(window);
+  window.fetch = async (input, init) => {
+    const r = await realFetch(input, init);
+    if (r.status === 401 && /^api\//.test(String(input))) location.replace("login");
+    return r;
+  };
+  document.addEventListener("visibilitychange", pullIfNewer);
+  window.addEventListener("focus", pullIfNewer);
+  fetch("api/me", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((me) => {
+    if (!me || !me.hosted) return;
+    $("accountBtn").classList.remove("hidden");
+    $("dropNote").innerHTML = "Drag an exported <code>.xml</code> wordbook onto this page, or tap to pick one — it is stored on the server and shared by all your devices";
+  }).catch(() => {});
+}
 (async function init() {
   await adoptServerState(); // before the first read: a moved port must not look like a fresh start
   words = loadJSON(LS.words, []);

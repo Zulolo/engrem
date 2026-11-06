@@ -13,3 +13,6 @@ image-cache/
 # a copy of the imported wordbook (Youdao content), never commit it
 state.json
 last-port.json
+
+# Hosted-mode credentials (password hash, device cookies) — never commit
+auth.json

@@ -1,0 +1,26 @@
+# /etc/systemd/system/engrem.service — EngRem in hosted mode (see deploy/install.sh)
+[Unit]
+Description=EngRem vocabulary server (hosted mode)
+Documentation=https://github.com/Zulolo/engrem
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=engrem
+Group=engrem
+EnvironmentFile=/etc/engrem/env
+WorkingDirectory=/opt/engrem
+ExecStart=/usr/bin/node /opt/engrem/server.js
+Restart=always
+RestartSec=3
+# Hardening: read-only system, the data folder is the only writable place
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/engrem
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

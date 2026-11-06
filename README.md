@@ -154,6 +154,38 @@ also triggers the check.)
   filters by level and shows the counts.
 - **Shuffle** and a **searchable word list** for jumping around.
 
+## Hosted mode: one always-on box, every device
+
+The same server can run as a service on a small Linux board (Orange Pi,
+Raspberry Pi, any Debian box) and be reached from a PC or phone anywhere,
+with one shared set of caches (examples, pictures, audio) and one shared study
+position. Set `ENGREM_HOSTED=1` and the server adds:
+
+- **A password.** The initial one (`Aa123456`, or `ENGREM_INITIAL_PASSWORD`)
+  must be changed at the first sign-in; nothing else works until it is.
+- **Enrolled devices instead of daily logins.** A device enters the password
+  once and then keeps a cookie that is renewed on every visit (400 days, the
+  browsers' cap), so it never asks again while in use. **A new device can
+  only be enrolled from inside the home network**: directly from a private
+  address, or through the tunnel from the same public IP the server has. At
+  most five devices; a sixth sign-in evicts the device used least recently.
+  The 🔒 button in the header opens the account page: change the password,
+  see and forget devices, sign out.
+- **Wordbook upload.** Dropping or picking an exported `.xml` sends it to the
+  server's data folder, so every device lists it and the automatic
+  "re-exported under the same name" refresh works everywhere.
+- **Shared progress.** The study state is stamped by the server; a device
+  adopts the server copy when it is newer than what it last sent, including
+  when a tab comes back to the foreground. Last writer wins.
+- Data (wordbooks, caches, `state.json`, `auth.json`) lives in `ENGREM_DATA`
+  instead of next to the code; the port is fixed and bound to every interface.
+
+Install on the box with `sudo bash deploy/install.sh` (Node.js, an unprivileged
+`engrem` user, `/opt/engrem` + `/var/lib/engrem`, a systemd unit; optionally a
+Cloudflare Tunnel with `--tunnel-token`), redeploy with `bash deploy/push.sh`.
+Without `ENGREM_HOSTED` the server behaves exactly as before: loopback only,
+no password.
+
 ## Notes on Youdao's export format (quirks observed in practice)
 
 - **Exporting onto an existing file name appends instead of overwriting.**

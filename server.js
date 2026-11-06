@@ -8,8 +8,16 @@
  *                               on disk in phonetic-cache.json)
  *   /api/state                — GET/POST mirror of the browser's study data
  *                               (state.json), so progress survives the forced
- *                               port changes Windows sometimes causes
+ *                               port changes Windows sometimes causes, and so
+ *                               several devices share one study position
+ *   /api/upload               — POST an exported wordbook (.xml) into the data
+ *                               folder, where /api/list finds it
  * Start it with EngRem.bat or: node server.js
+ *
+ * Hosted mode (ENGREM_HOSTED=1, see hosted.js and deploy/): the same server on
+ * an always-on Linux box, reachable from anywhere through a tunnel, with a
+ * password, a short list of enrolled devices and the data kept in
+ * ENGREM_DATA (default: this folder) instead of next to the code.
  */
 "use strict";
 const http = require("http");
@@ -18,9 +26,12 @@ const path = require("path");
 const { exec } = require("child_process");
 
 const ROOT = __dirname;
+const HOSTED = process.env.ENGREM_HOSTED === "1";
+const DATA = path.resolve(process.env.ENGREM_DATA || ROOT); // wordbooks, caches, state, auth
+try { fs.mkdirSync(DATA, { recursive: true }); } catch {}
 const START_PORT = parseInt(process.env.ENGREM_PORT, 10) || 8017;
-const CACHE_FILE = path.join(ROOT, "examples-cache.json");
-const AUDIO_DIR = path.join(ROOT, "audio-cache");
+const CACHE_FILE = path.join(DATA, "examples-cache.json");
+const AUDIO_DIR = path.join(DATA, "audio-cache");
 const AUDIO_INDEX = path.join(AUDIO_DIR, "index.json");
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -69,7 +80,7 @@ setInterval(() => {
 }, 3000).unref();
 
 /* ---------- image cache (files on disk + index) ---------- */
-const IMG_DIR = path.join(ROOT, "image-cache");
+const IMG_DIR = path.join(DATA, "image-cache");
 const IMG_INDEX = path.join(IMG_DIR, "index.json");
 const IMG_MIME = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml" };
 let imgIndex = {}; // word -> { file, src, attr }
@@ -86,7 +97,7 @@ setInterval(() => {
 }, 3000).unref();
 
 /* ---------- phonetic cache (disk-backed) ---------- */
-const PHON_FILE = path.join(ROOT, "phonetic-cache.json");
+const PHON_FILE = path.join(DATA, "phonetic-cache.json");
 let phonCache = {}; // word -> { p: "[ipa]" or "" (no dictionary has it), ts }
 try { phonCache = JSON.parse(fs.readFileSync(PHON_FILE, "utf-8")); } catch {}
 let phonDirty = false;
@@ -105,10 +116,14 @@ setInterval(() => {
    the study data then looks gone. Two defences: the client mirrors its state
    here so any port can restore it, and the bound port is remembered so the
    next launch tries the same one first. */
-const STATE_FILE = path.join(ROOT, "state.json");
-const PORT_FILE = path.join(ROOT, "last-port.json");
-let stateBody = null; // raw JSON string, exactly as the client sent it
-try { stateBody = fs.readFileSync(STATE_FILE, "utf-8"); } catch {}
+const STATE_FILE = path.join(DATA, "state.json");
+const PORT_FILE = path.join(DATA, "last-port.json");
+let stateBody = null; // JSON string as the client sent it, plus _ts (server receive time)
+let stateTs = 0;      // lets a second device tell whether the server copy is newer than its own
+try {
+  stateBody = fs.readFileSync(STATE_FILE, "utf-8");
+  stateTs = (JSON.parse(stateBody) || {})._ts || 0;
+} catch {}
 let stateDirty = false;
 function saveStateSoon() { stateDirty = true; }
 setInterval(() => {
@@ -818,6 +833,27 @@ async function fetchPhonetic(word) {
 }
 
 /* ---------- http server ---------- */
+const hostedMode = HOSTED ? require("./hosted.js")({
+  dataDir: DATA,
+  publicUrl: process.env.ENGREM_PUBLIC_URL || "",
+  lanUrl: process.env.ENGREM_LAN_URL || "",
+}) : null;
+
+/* The wordbook files: every .xml in the data folder (uploads land there too). */
+function listWordbooks() {
+  try {
+    return fs.readdirSync(DATA)
+      .filter((n) => /\.xml$/i.test(n))
+      .map((n) => {
+        try {
+          const st = fs.statSync(path.join(DATA, n));
+          return st.isFile() ? { name: n, size: st.size, mtime: Math.round(st.mtimeMs) } : null;
+        } catch { return null; }
+      })
+      .filter(Boolean);
+  } catch { return []; }
+}
+
 const server = http.createServer(async (req, res) => {
   let url;
   try {
@@ -830,21 +866,49 @@ const server = http.createServer(async (req, res) => {
   try { pathname = decodeURIComponent(url.pathname); }
   catch { res.writeHead(400).end("Bad request"); return; }
 
+  // hosted mode: login pages and the sign-in check come first; a request that
+  // gets past this line belongs to a signed-in device
+  if (hostedMode) {
+    try { if (await hostedMode.handle(req, res, url, pathname)) return; }
+    catch (e) { console.error("auth error:", e.message); res.writeHead(500).end(); return; }
+  }
+
   if (pathname === "/api/list") {
-    let files = [];
+    res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
+    res.end(JSON.stringify(listWordbooks()));
+    return;
+  }
+
+  /* An exported wordbook sent by the browser (drag & drop, file picker — on a
+     phone too). Stored in the data folder under its own name, so every device
+     sees it in the list and the "re-export under the same name" refresh keeps
+     working across devices. */
+  if (pathname === "/api/upload") {
+    if (req.method !== "POST") { res.writeHead(405).end(); return; }
+    let name = "";
+    try { name = decodeURIComponent(req.headers["x-file-name"] || ""); } catch {}
+    name = path.basename(name.replace(/[\\/]/g, "_")).replace(/[\x00-\x1f]/g, "").trim();
+    if (!/\.xml$/i.test(name) || name.startsWith(".")) { res.writeHead(400, { "Content-Type": MIME[".json"] }).end(JSON.stringify({ error: "a .xml file name is required" })); return; }
+    const chunks = []; let size = 0;
+    for await (const c of req) {
+      size += c.length;
+      if (size > 30 * 1048576) { res.writeHead(413).end(); return; }
+      chunks.push(c);
+    }
+    const text = Buffer.concat(chunks).toString("utf-8");
+    if (!(text.includes("<wordbook>") && text.includes("<item>") && text.includes("<word>"))) {
+      res.writeHead(400, { "Content-Type": MIME[".json"] }).end(JSON.stringify({ error: "not a Youdao wordbook export" }));
+      return;
+    }
     try {
-      files = fs.readdirSync(ROOT)
-        .filter((n) => /\.xml$/i.test(n))
-        .map((n) => {
-          try {
-            const st = fs.statSync(path.join(ROOT, n));
-            return { name: n, size: st.size, mtime: Math.round(st.mtimeMs) };
-          } catch { return null; }
-        })
-        .filter(Boolean);
-    } catch {}
-    res.writeHead(200, { "Content-Type": MIME[".json"] });
-    res.end(JSON.stringify(files));
+      fs.writeFileSync(path.join(DATA, name), text);
+      const st = fs.statSync(path.join(DATA, name));
+      console.log("Wordbook uploaded: " + name + " (" + st.size + " bytes)");
+      res.writeHead(200, { "Content-Type": MIME[".json"] });
+      res.end(JSON.stringify({ ok: true, name, size: st.size, mtime: Math.round(st.mtimeMs) }));
+    } catch (e) {
+      res.writeHead(500, { "Content-Type": MIME[".json"] }).end(JSON.stringify({ error: e.message }));
+    }
     return;
   }
 
@@ -905,12 +969,22 @@ const server = http.createServer(async (req, res) => {
       });
       req.on("end", () => {
         const body = Buffer.concat(chunks).toString("utf-8");
-        try { JSON.parse(body); } catch { res.writeHead(400).end(); return; }
-        stateBody = body;
+        let obj;
+        try { obj = JSON.parse(body); } catch { res.writeHead(400).end(); return; }
+        if (!obj || typeof obj !== "object" || Array.isArray(obj)) { res.writeHead(400).end(); return; }
+        // stamp the server copy, so another device can see it is newer than its own
+        stateTs = Math.max(Date.now(), stateTs + 1);
+        obj._ts = stateTs;
+        stateBody = JSON.stringify(obj);
         saveStateSoon();
-        res.writeHead(200, { "Content-Type": MIME[".json"] });
-        res.end(JSON.stringify({ ok: true }));
+        res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
+        res.end(JSON.stringify({ ok: true, ts: stateTs }));
       });
+      return;
+    }
+    if (url.searchParams.get("meta") === "1") { // cheap "is there anything newer?" poll
+      res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
+      res.end(JSON.stringify({ ts: stateTs }));
       return;
     }
     res.writeHead(200, { "Content-Type": MIME[".json"], "Cache-Control": "no-store" });
@@ -1099,9 +1173,13 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === "/") pathname = "/index.html";
-  // resolve inside ROOT only — reject traversal
-  const full = path.join(ROOT, path.normalize(pathname).replace(/^([/\\])+/, ""));
-  if (!full.startsWith(ROOT) || !fs.existsSync(full) || !fs.statSync(full).isFile()) {
+  // resolve inside ROOT only — reject traversal; wordbooks (top-level .xml)
+  // come from the data folder, which may be elsewhere in hosted mode
+  const rel = path.normalize(pathname).replace(/^([/\\])+/, "");
+  const base = /^[^/\\]+\.xml$/i.test(rel) ? DATA : ROOT;
+  const full = path.join(base, rel);
+  if (/(^|[/\\])(auth\.json|\.[^/\\]*)$/i.test(rel)) { res.writeHead(404).end("Not found"); return; } // never the credentials or dotfiles
+  if (!full.startsWith(base) || !fs.existsSync(full) || !fs.statSync(full).isFile()) {
     res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("Not found");
     return;
@@ -1122,24 +1200,32 @@ server.on("listening", () => {
   const port = server.address().port;
   // remember the bound port for the next launch — but an explicit ENGREM_PORT
   // run is a one-off override, not a preference
-  if (!process.env.ENGREM_PORT && port !== lastPort) { try { fs.writeFileSync(PORT_FILE, String(port)); } catch {} }
+  if (!HOSTED && !process.env.ENGREM_PORT && port !== lastPort) { try { fs.writeFileSync(PORT_FILE, String(port)); } catch {} }
   const url = "http://127.0.0.1:" + port + "/";
-  console.log("EngRem is running at " + url);
+  console.log("EngRem is running at " + url + (HOSTED ? " (hosted mode, bound to " + BIND + ")" : ""));
+  console.log("Data folder: " + DATA);
   console.log("Example cache: " + CACHE_FILE + " (" + Object.keys(exCache).length + " words)");
+  if (HOSTED) return; // a service: no console audience, no browser to open
   console.log("Keep this window open while studying; close it to stop.");
-  exec('start "" "' + url + '"'); // open default browser (Windows)
+  if (process.platform === "win32") exec('start "" "' + url + '"'); // open default browser
 });
+
+/* Hosted mode listens on a fixed port and, by default, on every interface:
+   the tunnel daemon on the same box and the home LAN both reach it. */
+const BIND = HOSTED ? (process.env.ENGREM_BIND || "0.0.0.0") : "127.0.0.1";
 
 function listen(port, walking) {
   server.once("error", (e) => {
     // EACCES: Windows can reserve whole port ranges (Hyper-V/WinNAT), and the
     // reserved ranges move around after a reboot — walk past them, and as a
-    // last resort take any free port (0 = OS-assigned)
-    if ((e.code === "EADDRINUSE" || e.code === "EACCES") && port !== 0) {
+    // last resort take any free port (0 = OS-assigned). A hosted service has
+    // a fixed port (the tunnel points at it): fail loudly instead.
+    if (!HOSTED && (e.code === "EADDRINUSE" || e.code === "EACCES") && port !== 0) {
       if (!walking) listen(START_PORT, true); // the remembered port is gone — run the normal walk
       else listen(port < START_PORT + 30 ? port + 1 : 0, true);
     } else { console.error("Failed to start server:", e.message); process.exit(1); }
   });
-  server.listen(port, "127.0.0.1");
+  server.listen(port, BIND);
 }
-listen(lastPort || START_PORT, !lastPort || lastPort === START_PORT);
+if (HOSTED) listen(START_PORT, true);
+else listen(lastPort || START_PORT, !lastPort || lastPort === START_PORT);
