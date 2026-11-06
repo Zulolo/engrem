@@ -234,6 +234,20 @@
     #listPanel { position: fixed; right: .5rem; top: 3.5rem; bottom: 3rem; z-index: 10; }
     #wordLine { font-size: 1.7rem; }
     .card { padding: 1.1rem 1.2rem; }
+    /* phones: a tighter header, and keyboard hints make no sense */
+    header { gap: .4rem; padding: .5rem .6rem; }
+    header h1 { font-size: 1rem; }
+    button.btn, label.btn, .seg button { padding: .3rem .55rem; font-size: .8rem; }
+    #accountBtn { padding: .3rem .5rem; }
+    .hint { display: none; }
+    /* the level picker had to share one row with four buttons and was clipped
+       (.seg hides overflow) — give it a full row of its own, with the three
+       levels spread across the width, and let Prev / Next fill the rest */
+    nav#navBar { flex-wrap: wrap; gap: .6rem; }
+    #levelSeg { order: -1; flex: 1 1 100%; display: flex; }
+    #levelSeg button { flex: 1; padding: .65rem .3rem; }
+    #prevBtn, #nextBtn { flex: 1; padding: .65rem .6rem; }
+    #speakBtn { padding: .65rem .8rem; }
   }
 </style>
 </head>
@@ -369,7 +383,7 @@
     </div>
   </div>
 </div>
-<footer>Data stays in your browser (localStorage). Examples: Youdao / Free Dictionary API / Wiktionary / Tatoeba.</footer>
+<footer><span id="footNote">Data stays in your browser (localStorage).</span> Examples: Youdao / Free Dictionary API / Wiktionary / Tatoeba.</footer>
 <div id="toast"></div>
 
 <script>
@@ -2530,6 +2544,7 @@ if (servedMode) {
   fetch("api/me", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((me) => {
     if (!me || !me.hosted) return;
     $("accountBtn").classList.remove("hidden");
+    $("footNote").textContent = "Progress and caches are shared through the server by all your devices.";
     $("dropNote").innerHTML = "Drag an exported <code>.xml</code> wordbook onto this page, or tap to pick one — it is stored on the server and shared by all your devices";
   }).catch(() => {});
 }
